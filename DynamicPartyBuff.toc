@@ -1,0 +1,10 @@
+## Interface: 20504
+## Title: DynamicPartyBuff
+## Notes: Dynamically buffs party members out of combat with a smart one-click button.
+## Author: stabaho
+## Version: 1.0.0
+## DefaultState: enabled
+
+Spells.lua
+Core.lua
+Button.lua
