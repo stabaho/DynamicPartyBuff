@@ -228,6 +228,8 @@ end
 -- Slash commands: /dpb
 --   /dpb        -> toggle show/hide (saves state)
 --   /dpb reset  -> move button back to default center position
+--   /dpb debug -> toggle scan debug output to chat
+--   /dpb help  -> show available commands
 -- ============================================================
 SLASH_DYNAMICPARTYBUFF1 = "/dpb"
 SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
@@ -238,7 +240,21 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
     button:Show()
     DPB:SavePosition()
     print("|cff00ff00[DPB]|r Button reset to default position.")
-  else
+  elseif cmd == "debug" then
+      DPB.debug = not DPB.debug
+      if DPB.debug then
+        print("|cff00ff00[DPB]|r Debug mode |cff00ff00ON|r - scan output will print to chat.")
+        DPB:ScanBuffs()
+      else
+        print("|cff00ff00[DPB]|r Debug mode |cffff4444OFF|r.")
+      end
+    elseif cmd == "help" then
+      print("|cff00ff00[DPB]|r Commands:")
+      print("  |cffffff00/dpb|r        - toggle button visibility")
+      print("  |cffffff00/dpb reset|r  - move button to default position")
+      print("  |cffffff00/dpb debug|r  - toggle scan debug output")
+      print("  |cffffff00/dpb help|r   - show this help")
+    else
     if button:IsShown() then
       button:Hide()
       DPB:SavePosition()
