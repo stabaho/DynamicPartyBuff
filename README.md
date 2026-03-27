@@ -16,8 +16,10 @@
 - **Saved position** - Button remembers its location across sessions via `SavedVariables`
 - **Cooldown display** - Shows real spell cooldown swipe animation on the button
 - **Rich tooltip** - Hover to see the spell name, rank, and target; left-click to cast
-- **Slash commands** - Toggle, reset position, hide/show via `/dpb`
+- **Debug mode** - `/dpb debug` toggles verbose scan output to chat for troubleshooting
+- **Slash commands** - Toggle, reset position, hide/show, debug, and help via `/dpb`
 - **Startup validation** - Warns in chat if any spell table entries have missing fields
+- **Clean namespace** - All state stored under the `DPB` table; no loose globals
 
 ---
 
@@ -56,6 +58,8 @@
 | **Drag** | Repositions the button (out of combat only) |
 | `/dpb` | Toggles button visibility |
 | `/dpb reset` | Moves button back to default center position |
+| `/dpb debug` | Toggles verbose scan output to chat (for troubleshooting) |
+| `/dpb help` | Shows all available slash commands |
 
 ---
 
@@ -72,12 +76,19 @@
 
 ## Changelog
 
+### v1.4.0 - Senior Review Release
+- **Namespace cleanup**: `DPB_Spells` global renamed to `DPB.Spells` — all state lives inside the `DPB` table, reducing global pollution
+- **Debug mode**: `/dpb debug` toggles `DPB.debug` flag; when enabled, `ScanBuffs()` prints each decision to chat (class, units scanned, spells skipped/found)
+- **`/dpb help`**: New slash command that lists all available `/dpb` commands in chat
+- **Skipped spell logging**: When debug is on, spells not in the player's spellbook are explicitly noted in output
+- **`DPBPrint()` helper**: Centralized colored chat print function used consistently throughout Core.lua
+
 ### v1.3.0 - Code Review Release
 - **[R1]** Removed redundant `table.sort()` from `ScanBuffs()` — spell table is now sorted once at `PLAYER_LOGIN`
 - **[R2]** `playerClass` is set only at `PLAYER_LOGIN` — no longer incorrectly re-set on zone transitions
-- **[R3]** `UNIT_AURA` handler now uses `unit:match()` instead of `string.find()` for idiomatic Lua
+- **[R3]** `UNIT_AURA` handler uses `unit:match("^party")` anchored to start of string for precision
 - **[R4]** Added `ValidateSpells()` — warns in chat at startup if any spell entry has missing required fields
-- **[R5]** `ScanBuffs()` now safely guards against a nil or empty `DPB_Spells` table
+- **[R5]** `ScanBuffs()` now safely guards against a nil or empty `DPB.Spells` table
 - **[R6]** Cooldown frame is now wired to actual spell cooldown via `GetSpellCooldown()` — swipe animation works
 - **[R7]** Spell name label truncation now uses `#string` length and `string.sub()` for safe character capping
 - **[R8]** Tooltip shows spell rank from `GetSpellInfo()` for full context
@@ -86,6 +97,7 @@
 - **[R11]** Added single-target fallback spells (Mark of the Wild, Arcane Intellect, Power Word: Fortitude)
 - **[R12]** Paladin blessing `targetClass` lists audited for TBC accuracy
 - Added Warlock `Detect Invisibility` support
+- Removed unconditional `button:Show()` at file load to eliminate login flicker
 
 ### v1.2.0 - Bug Fix Release
 - **[Bug 1]** Guard `DPB:SetButtonReady()` call so it doesn't crash before `Button.lua` loads
