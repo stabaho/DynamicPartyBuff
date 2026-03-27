@@ -2,7 +2,7 @@
 ## Title: DynamicPartyBuff
 ## Notes: Dynamically buffs party members out of combat with a smart one-click button.
 ## Author: stabaho
-## Version: 1.1.0
+## Version: 1.2.0
 ## DefaultState: enabled
 ## SavedVariables: DPB_SavedVars
 
