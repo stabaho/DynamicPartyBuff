@@ -3,6 +3,13 @@
 -- Uses SecureActionButtonTemplate so it works with the WoW protected action system.
 -- The button is draggable, shows the next spell icon + tooltip,
 -- and saves its screen position across sessions via DPB_SavedVars.
+--
+-- Bug fixes (v1.2.0):
+--   [Bug 2] Removed redundant PLAYER_LOGIN handler - Core.lua now owns that event
+--           and calls DPB:RestorePosition() before DPB:ScanBuffs() in the correct order.
+--   [Bug 4] UpdateButton() now handles nil nextTarget cleanly (group buff case).
+--   [Bug 5] SavePosition() now uses pixel math instead of GetPoint(1) to avoid
+--           stale/wrong anchor data after drag operations.
 
 -- ============================================================
 -- Default saved variable values
@@ -62,13 +69,13 @@ border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
 border:SetSize(64, 64)
 border:SetPoint("CENTER", button, "CENTER", 0, 0)
 
--- Status label (spell name or status text at bottom of button)
+-- Status label (spell name or status text below the button)
 local label = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 label:SetPoint("BOTTOM", button, "BOTTOM", 0, -14)
 label:SetTextColor(1, 1, 1, 1)
 label:SetText("Scanning...")
 
--- Target name label (shows who is being buffed)
+-- Target name label (shows who is being buffed, above button)
 local targetLabel = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 targetLabel:SetPoint("TOP", button, "TOP", 0, 14)
 targetLabel:SetTextColor(0.4, 0.9, 1, 1)
@@ -81,8 +88,14 @@ button:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
   if DPB.nextSpell then
     GameTooltip:SetText("|cffffd700" .. DPB.nextSpell .. "|r", 1, 1, 1)
-    local targetName = DPB.nextTarget and UnitName(DPB.nextTarget) or "Party"
-    GameTooltip:AddLine("Target: " .. (targetName or DPB.nextTarget), 0.4, 0.9, 1)
+    if DPB.nextTarget then
+      -- Single-target buff: show the target's name
+      local targetName = UnitName(DPB.nextTarget) or DPB.nextTarget
+      GameTooltip:AddLine("Target: " .. targetName, 0.4, 0.9, 1)
+    else
+      -- Group buff: cast on whole party
+      GameTooltip:AddLine("Target: Whole Party", 0.4, 0.9, 1)
+    end
     GameTooltip:AddLine("Left-click to cast.", 0.7, 0.7, 0.7)
     GameTooltip:AddLine("Drag to reposition.", 0.5, 0.5, 0.5)
   else
@@ -95,13 +108,26 @@ button:SetScript("OnLeave", function(self)
 end)
 
 -- ============================================================
--- SavePosition: write current pixel offset from screen center
--- into DPB_SavedVars so it persists across sessions.
+-- SavePosition: write current screen offset into DPB_SavedVars.
+--
+-- [Bug 5 Fix] Do NOT use button:GetPoint(1) - after a drag the anchor
+-- index can shift and return incorrect or stale values.
+-- Instead, calculate the CENTER offset from UIParent directly using
+-- absolute pixel positions, which is always accurate post-drag.
 -- ============================================================
 function DPB:SavePosition()
-  -- GetPoint returns: point, relativeTo, relativePoint, xOfs, yOfs
-  -- We always anchor to UIParent CENTER so xOfs/yOfs are absolute offsets.
-  local point, _, relPoint, x, y = button:GetPoint(1)
+  -- GetCenter() returns the absolute screen pixel coords of the frame center.
+  -- UIParent:GetCenter() returns the center of the screen.
+  -- The difference is exactly the x/y offset we need for SetPoint("CENTER", ...).
+  local bX, bY   = button:GetCenter()
+  local sX, sY   = UIParent:GetCenter()
+
+  -- If the button is hidden or not yet drawn GetCenter() can return nil
+  if not bX or not sX then return end
+
+  local x = bX - sX
+  local y = bY - sY
+
   DPB_SavedVars = DPB_SavedVars or {}
   DPB_SavedVars.x     = x
   DPB_SavedVars.y     = y
@@ -110,7 +136,8 @@ end
 
 -- ============================================================
 -- RestorePosition: read DPB_SavedVars and reposition the button.
--- Called once on PLAYER_LOGIN after saved vars are loaded by WoW.
+-- Called by Core.lua's PLAYER_LOGIN handler (after SavedVars are loaded)
+-- to guarantee correct ordering: position restored BEFORE ScanBuffs() runs.
 -- ============================================================
 function DPB:RestorePosition()
   DPB_SavedVars = DPB_SavedVars or {}
@@ -119,12 +146,12 @@ function DPB:RestorePosition()
   local y     = DPB_SavedVars.y
   local shown = DPB_SavedVars.shown
 
-  -- First-time defaults if no saved data exists yet
+  -- First-time defaults (no saved data yet)
   if x == nil then x = DEFAULT_X end
   if y == nil then y = DEFAULT_Y end
   if shown == nil then shown = DEFAULT_SHOWN end
 
-  -- Clear all existing anchors then re-anchor to saved position
+  -- Re-anchor to saved position
   button:ClearAllPoints()
   button:SetPoint("CENTER", UIParent, "CENTER", x, y)
 
@@ -138,34 +165,43 @@ function DPB:RestorePosition()
 end
 
 -- ============================================================
--- UpdateButton: called by Core.lua after a scan.
--- Wires up secure attributes and updates visuals.
+-- UpdateButton: called by Core.lua after every scan.
+-- Handles both single-target and group buff cases cleanly.
+-- [Bug 4 Fix] nextTarget may be nil for group buffs - handled safely.
 -- ============================================================
 function DPB:UpdateButton()
-  -- Must not be in combat to change secure attributes
+  -- Secure attributes cannot be changed during combat lockdown
   if InCombatLockdown() then return end
 
-  if DPB.nextSpell and DPB.nextTarget then
-    -- Update secure attributes for the protected cast
+  if DPB.nextSpell then
+    -- Set spell attribute always
     button:SetAttribute("spell", DPB.nextSpell)
-    button:SetAttribute("unit",  DPB.nextTarget)
+
+    if DPB.nextTarget then
+      -- Single-target buff: set the unit attribute so the click targets correctly
+      button:SetAttribute("unit", DPB.nextTarget)
+      local targetName = UnitName(DPB.nextTarget) or DPB.nextTarget
+      targetLabel:SetText(targetName)
+    else
+      -- Group buff: clear unit attribute so the spell casts as a true AoE
+      button:SetAttribute("unit", nil)
+      targetLabel:SetText("Party")
+    end
 
     -- Update icon
     iconTex:SetTexture(DPB.nextIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
 
-    -- Update labels
-    local targetName = UnitName(DPB.nextTarget) or DPB.nextTarget
+    -- Shorten long spell names for the label
     local shortSpell = DPB.nextSpell
     if string.len(shortSpell) > 14 then
       shortSpell = string.sub(shortSpell, 1, 13) .. "..."
     end
     label:SetText(shortSpell)
-    targetLabel:SetText(targetName)
 
     button:SetAlpha(1.0)
     DPB:SetButtonReady(true)
   else
-    -- No buffs needed
+    -- No buffs needed - all up!
     iconTex:SetTexture("Interface\\Icons\\Spell_Holy_Resurrection")
     label:SetText("|cff00ff00All Up!|r")
     targetLabel:SetText("")
@@ -203,7 +239,6 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
   local cmd = string.lower(msg or "")
 
   if cmd == "reset" then
-    -- Reset to default center position
     button:ClearAllPoints()
     button:SetPoint("CENTER", UIParent, "CENTER", DEFAULT_X, DEFAULT_Y)
     button:Show()
@@ -211,7 +246,6 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
     print("|cff00ff00[DPB]|r Button reset to default position.")
 
   else
-    -- Toggle visibility and save the new shown state
     if button:IsShown() then
       button:Hide()
       DPB:SavePosition()
@@ -224,16 +258,8 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
   end
 end
 
--- ============================================================
--- Restore position on login (PLAYER_LOGIN fires after SavedVars load)
--- We hook this event here in Button.lua since it's UI-specific.
--- ============================================================
-local posFrame = CreateFrame("Frame")
-posFrame:RegisterEvent("PLAYER_LOGIN")
-posFrame:SetScript("OnEvent", function(self, event)
-  DPB:RestorePosition()
-  -- Unregister so this only fires once per session
-  self:UnregisterEvent("PLAYER_LOGIN")
-end)
+-- NOTE: PLAYER_LOGIN is intentionally NOT registered here.
+-- Core.lua owns PLAYER_LOGIN and calls DPB:RestorePosition() before
+-- DPB:ScanBuffs() to guarantee correct ordering.
 
 button:Show()
