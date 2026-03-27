@@ -204,7 +204,7 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
   elseif event == "UNIT_AURA" then
     -- [R3] unit:match() is more idiomatic than string.find() for simple pattern checks.
     local unit = ...
-    if unit == "player" or unit:match("party") then
+    if unit == "player" or unit:match("^party") then
       DPB:ScanBuffs()
     end
 
