@@ -3,20 +3,21 @@
 -- Scans party members for missing buffs out of combat and
 -- updates the dynamic button with the next target + spell to cast.
 --
--- Bug fixes (v1.2.0):
---   [Bug 1] Guard DPB:SetButtonReady() call so it doesn't crash before Button.lua loads
---   [Bug 2] Merged PLAYER_LOGIN handling so RestorePosition() fires BEFORE ScanBuffs()
---   [Bug 3] Replaced deprecated GetNumPartyMembers() with GetNumGroupMembers() (TBC API)
---   [Bug 4] Group buffs no longer set a 'unit' attribute - let the spell's AoE handle targeting
+-- Code Review fixes (v1.3.0):
+--   [R1] Removed table.sort() from ScanBuffs() - now sorted once at PLAYER_LOGIN.
+--   [R2] playerClass set only in PLAYER_LOGIN, not repeated in PLAYER_ENTERING_WORLD.
+--   [R3] UNIT_AURA now uses unit:match() instead of string.find() for idiom consistency.
+--   [R4] Added ValidateSpells() to warn on malformed spell table entries at startup.
+--   [R5] ScanBuffs() guards against nil/empty DPB_Spells gracefully.
 
 -- ============================================================
 -- Namespace & state
 -- ============================================================
 DPB = DPB or {}
-DPB.nextSpell   = nil   -- spell name to cast next
-DPB.nextTarget  = nil   -- unit token ("player", "party1" .. "party4")
-DPB.nextIcon    = nil   -- icon path for button texture
-DPB.playerClass = nil   -- caster's class (e.g. "DRUID")
+DPB.nextSpell    = nil  -- spell name to cast next
+DPB.nextTarget   = nil  -- unit token ("player", "party1" .. "party4")
+DPB.nextIcon     = nil  -- icon path for button texture
+DPB.playerClass  = nil  -- caster's class (e.g. "DRUID")
 
 -- ============================================================
 -- Helpers
@@ -72,6 +73,22 @@ local function GetPartyUnits()
   return units
 end
 
+-- [R4] Validate spell table entries at startup and print warnings for bad data.
+local function ValidateSpells()
+  if not DPB_Spells then
+    print("|cffff4444[DPB]|r WARNING: DPB_Spells is nil - no spells loaded!")
+    return
+  end
+  local required = { "spellName", "buffName", "icon", "class", "priority", "isGroupBuff" }
+  for i, spell in ipairs(DPB_Spells) do
+    for _, field in ipairs(required) do
+      if spell[field] == nil then
+        print("|cffff4444[DPB]|r WARNING: Spell #" .. i .. " (" .. (spell.spellName or "?") .. ") missing field: " .. field)
+      end
+    end
+  end
+end
+
 -- ============================================================
 -- Core Scan: find the highest-priority missing buff
 -- ============================================================
@@ -85,27 +102,33 @@ function DPB:ScanBuffs()
     return
   end
 
-  local playerClass = DPB.playerClass
-  local units       = GetPartyUnits()
+  -- [R5] Guard against missing or empty spell table
+  if not DPB_Spells or #DPB_Spells == 0 then
+    DPB.nextSpell  = nil
+    DPB.nextTarget = nil
+    DPB.nextIcon   = nil
+    DPB:UpdateButton()
+    return
+  end
 
-  -- Sort spell list by priority (lowest number = highest priority)
-  table.sort(DPB_Spells, function(a, b) return a.priority < b.priority end)
+  local playerClass = DPB.playerClass
+  local units = GetPartyUnits()
+
+  -- [R1] NOTE: DPB_Spells is sorted once in PLAYER_LOGIN - do NOT sort here.
 
   for _, spell in ipairs(DPB_Spells) do
     -- Skip spells the player's class cannot cast
     if spell.class == playerClass and PlayerKnowsSpell(spell.spellName) then
-
       if spell.isGroupBuff then
         -- [Bug 4 Fix] Group buffs: check if ANY party member is missing the buff.
         -- We do NOT set a unit attribute - group buff spells in TBC (Gift of the Wild,
         -- Prayer of Fortitude, etc.) cast on the whole party/raid automatically.
-        -- Setting unit="player" would restrict the cast and break the AoE behavior.
         for _, unit in ipairs(units) do
           if UnitExists(unit) and not UnitIsDead(unit) then
             if ClassMatches(unit, spell.targetClass) then
               if not UnitHasBuff(unit, spell.buffName) then
                 DPB.nextSpell  = spell.spellName
-                DPB.nextTarget = nil   -- nil = no unit override; spell itself is AoE
+                DPB.nextTarget = nil  -- nil = no unit override; spell itself is AoE
                 DPB.nextIcon   = spell.icon
                 DPB:UpdateButton()
                 return
@@ -143,38 +166,45 @@ end
 -- Event Frame
 -- ============================================================
 local eventFrame = CreateFrame("Frame", "DPB_EventFrame", UIParent)
-
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("UNIT_AURA")
 eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")   -- TBC: party roster changes
-eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")  -- TBC fallback
-eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")   -- Just left combat
+eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED") -- TBC fallback
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")  -- Just left combat
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
   if event == "PLAYER_LOGIN" then
-    -- [Bug 2 Fix] On PLAYER_LOGIN, SavedVars are guaranteed loaded by WoW.
-    -- Restore button position FIRST so the button is in the right place
-    -- before ScanBuffs() calls UpdateButton() and the player sees it.
+    -- [R2] Set playerClass ONCE here. Class never changes within a session.
     local _, class = UnitClass("player")
     DPB.playerClass = class
-    -- RestorePosition is defined in Button.lua which is loaded after Core.lua,
-    -- but PLAYER_LOGIN fires after ALL files are loaded, so it is safe to call.
+
+    -- [R4] Validate spell table entries at startup.
+    ValidateSpells()
+
+    -- [R1] Sort spell table ONCE here, not on every ScanBuffs() call.
+    -- DPB_Spells is static data - sorting it every scan was wasteful.
+    if DPB_Spells then
+      table.sort(DPB_Spells, function(a, b) return a.priority < b.priority end)
+    end
+
+    -- Restore button position before ScanBuffs so button is placed correctly
+    -- before UpdateButton() fires.
     if DPB.RestorePosition then
       DPB:RestorePosition()
     end
+
     DPB:ScanBuffs()
 
   elseif event == "PLAYER_ENTERING_WORLD" then
-    -- Fires on every zone transition/reload - just re-scan, position already set
-    local _, class = UnitClass("player")
-    DPB.playerClass = class
+    -- Zone transition / UI reload. Class already set. Just re-scan.
+    -- [R2] playerClass intentionally NOT re-set here - it's already correct from PLAYER_LOGIN.
     DPB:ScanBuffs()
 
   elseif event == "UNIT_AURA" then
-    -- Only re-scan when a party member or the player's auras change
+    -- [R3] unit:match() is more idiomatic than string.find() for simple pattern checks.
     local unit = ...
-    if unit == "player" or string.find(unit, "party") then
+    if unit == "player" or unit:match("party") then
       DPB:ScanBuffs()
     end
 
