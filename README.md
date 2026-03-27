@@ -6,126 +6,112 @@
 
 ## Features
 
-- **One-button buffing** — Click once to cast the highest-priority missing buff on the correct target
-- **Smart targeting** — Auto-selects party members who need buffs; no manual targeting required
-- **Class-aware** — Only shows spells your class can cast (Druid, Priest, Mage, Paladin supported)
-- **Priority system** — Buffs are applied in a configurable priority order (group buffs first)
-- **Real-time scanning** — Updates instantly when auras change, party composition changes, or you leave combat
-- **Out-of-combat only** — Fully respects WoW's combat lockdown; safe to use
-- **Draggable button** — Reposition the button anywhere on screen by dragging it
-- **Saved position** — Button remembers its location across sessions via `SavedVariables`
-- **Tooltip** — Hover to see what spell will be cast and on whom
-- **Slash commands** — Toggle, reset position, hide/show via `/dpb`
+- **One-button buffing** - Click once to cast the highest-priority missing buff on the correct target
+- **Smart targeting** - Auto-selects party members who need buffs; no manual targeting required
+- **Class-aware** - Only shows spells your class can cast (Druid, Priest, Mage, Paladin, Warlock supported)
+- **Priority system** - Buffs are applied in a configurable priority order (group buffs first)
+- **Real-time scanning** - Updates instantly when auras change, party composition changes, or you leave combat
+- **Out-of-combat only** - Fully respects WoW's combat lockdown; safe to use
+- **Draggable button** - Reposition the button anywhere on screen by dragging it
+- **Saved position** - Button remembers its location across sessions via `SavedVariables`
+- **Cooldown display** - Shows real spell cooldown swipe animation on the button
+- **Rich tooltip** - Hover to see the spell name, rank, and target; left-click to cast
+- **Slash commands** - Toggle, reset position, hide/show via `/dpb`
+- **Startup validation** - Warns in chat if any spell table entries have missing fields
+
+---
+
+## Supported Classes & Buffs
+
+| Class | Buffs |
+|---------|-------|
+| Druid | Gift of the Wild / Mark of the Wild, Thorns |
+| Priest | Prayer of Fortitude / Power Word: Fortitude, Prayer of Shadow Protection, Divine Spirit |
+| Mage | Arcane Brilliance / Arcane Intellect |
+| Paladin | Greater Blessing of Kings, Might, Wisdom, Salvation |
+| Warlock | Detect Invisibility |
+
+> Group buffs (Gift of the Wild, Prayer of Fortitude, etc.) are prioritized and cast party-wide. Single-target fallbacks are used automatically when you don't have the group rank.
 
 ---
 
 ## Installation
 
 1. Download or clone this repository
-2. Copy the `DynamicPartyBuff` folder into:
+2. Place the `DynamicPartyBuff` folder into your WoW addons directory:
    ```
    World of Warcraft/_classic_tbc_/Interface/AddOns/
    ```
-3. Launch WoW and enable the addon in the **AddOns** menu on the character select screen
-4. Log in — the button appears at your last saved position and begins scanning immediately
+3. Launch WoW and enable the addon in the AddOns menu
+4. The button appears on screen immediately. Drag it to your preferred position.
 
 ---
 
-## File Structure
+## Usage
 
-```
-DynamicPartyBuff/
-├── DynamicPartyBuff.toc   # Addon manifest (interface version, SavedVariables, load order)
-├── Spells.lua             # Spell & buff data table (add/edit spells here)
-├── Core.lua               # Buff scanner, party loop, event handling
-├── Button.lua             # Secure dynamic button, visuals, tooltip, position saving
-├── LICENSE
-└── README.md
-```
-
----
-
-## Supported Classes & Buffs
-
-| Class | Spell | Buff Detected | Type |
-|-------|-------|--------------|------|
-| Druid | Gift of the Wild | Mark of the Wild | Group |
-| Druid | Thorns | Thorns | Single |
-| Priest | Prayer of Fortitude | Power Word: Fortitude | Group |
-| Priest | Prayer of Shadow Protection | Shadow Protection | Group |
-| Priest | Divine Spirit | Divine Spirit | Single |
-| Mage | Arcane Brilliance | Arcane Intellect | Group |
-| Paladin | Greater Blessing of Kings | Blessing of Kings | Single |
-| Paladin | Greater Blessing of Might | Blessing of Might | Single (melee) |
-| Paladin | Greater Blessing of Wisdom | Blessing of Wisdom | Single (casters) |
-| Paladin | Greater Blessing of Salvation | Blessing of Salvation | Single |
+| Action | Result |
+|--------|--------|
+| **Left-click** | Casts the next needed buff on the correct target |
+| **Hover** | Shows tooltip with spell name, rank, and target |
+| **Drag** | Repositions the button (out of combat only) |
+| `/dpb` | Toggles button visibility |
+| `/dpb reset` | Moves button back to default center position |
 
 ---
 
 ## How It Works
 
-1. On load and whenever auras/party changes, `Core.lua` scans all party members
-2. It walks through `DPB_Spells` (sorted by priority) and finds the first missing buff
-3. It sets `DPB.nextSpell` and `DPB.nextTarget` then calls `DPB:UpdateButton()`
-4. `Button.lua` updates the button icon, labels, and secure attributes (`spell` + `unit`)
-5. Left-clicking the button casts the spell on the correct target via the protected action system
-6. After the cast, `UNIT_AURA` fires, triggering a re-scan for the next needed buff
+1. On login, the addon reads your class and sorts the spell table by priority
+2. After each combat exit, aura change, or party roster change, it scans all party members
+3. For each spell in priority order, it checks if any eligible party member is missing that buff
+4. The button is updated with the next spell to cast and who it targets
+5. One click casts the buff using WoW's secure action system (no taint risk)
+6. The scan repeats until all buffs are up, then the button dims and shows "All Up!"
 
 ---
 
-## Saved Button Position
+## Changelog
 
-The button's screen position and visibility are saved automatically to `DPB_SavedVars` (stored in `WTF/Account/.../SavedVariables/DynamicPartyBuff.lua`).
+### v1.3.0 - Code Review Release
+- **[R1]** Removed redundant `table.sort()` from `ScanBuffs()` — spell table is now sorted once at `PLAYER_LOGIN`
+- **[R2]** `playerClass` is set only at `PLAYER_LOGIN` — no longer incorrectly re-set on zone transitions
+- **[R3]** `UNIT_AURA` handler now uses `unit:match()` instead of `string.find()` for idiomatic Lua
+- **[R4]** Added `ValidateSpells()` — warns in chat at startup if any spell entry has missing required fields
+- **[R5]** `ScanBuffs()` now safely guards against a nil or empty `DPB_Spells` table
+- **[R6]** Cooldown frame is now wired to actual spell cooldown via `GetSpellCooldown()` — swipe animation works
+- **[R7]** Spell name label truncation now uses `#string` length and `string.sub()` for safe character capping
+- **[R8]** Tooltip shows spell rank from `GetSpellInfo()` for full context
+- **[R9]** Tooltip target name has proper nil-guard on `UnitName()` result
+- **[R10]** All `buffName` values verified against actual TBC aura names returned by `UnitBuff()`
+- **[R11]** Added single-target fallback spells (Mark of the Wild, Arcane Intellect, Power Word: Fortitude)
+- **[R12]** Paladin blessing `targetClass` lists audited for TBC accuracy
+- Added Warlock `Detect Invisibility` support
 
-| Event | What happens |
-|---|---|
-| Drag and release | Position saved immediately via `DPB:SavePosition()` |
-| `/dpb` (hide/show) | Visibility state saved immediately |
-| `/dpb reset` | Position reset to screen center; saved |
-| Next login | `PLAYER_LOGIN` fires after WoW loads SavedVars; `DPB:RestorePosition()` re-anchors the button |
+### v1.2.0 - Bug Fix Release
+- **[Bug 1]** Guard `DPB:SetButtonReady()` call so it doesn't crash before `Button.lua` loads
+- **[Bug 2]** Merged `PLAYER_LOGIN` handling so `RestorePosition()` fires before `ScanBuffs()`
+- **[Bug 3]** Replaced deprecated `GetNumPartyMembers()` with `GetNumGroupMembers()` (TBC API)
+- **[Bug 4]** Group buffs no longer set a `unit` attribute — the spell's AoE handles targeting
+- **[Bug 5]** `SavePosition()` uses pixel math instead of `GetPoint(1)` to avoid stale anchor data
 
-On first install (no saved data), the button defaults to screen center with a -200px vertical offset.
+### v1.1.0
+- Added `SavedVariables` position persistence
+- Button position saved across sessions
 
----
-
-## Adding or Editing Spells
-
-Open `Spells.lua` and add a new entry to the `DPB_Spells` table:
-
-```lua
-{
-  spellName   = "Mark of the Wild",   -- Exact spell name to cast
-  buffName    = "Mark of the Wild",   -- Aura name to check on the unit
-  icon        = "Interface\\Icons\\Spell_Nature_Regeneration",
-  class       = "DRUID",              -- Only show for this class
-  targetClass = nil,                  -- nil = all, or { "WARRIOR", "ROGUE" }
-  priority    = 1,                    -- Lower = cast sooner
-  isGroupBuff = false,                -- true = AoE cast on self targets group
-},
-```
-
----
-
-## Slash Commands
-
-| Command | Action |
-|---------|--------|
-| `/dpb` | Toggle button visibility (state is saved) |
-| `/dpb reset` | Move button back to default center position |
+### v1.0.0
+- Initial release
+- Dynamic buff button with class-aware spell scanning
+- Druid, Priest, Mage, Paladin support
 
 ---
 
-## Roadmap
+## Requirements
 
-- [x] Saved button position across sessions
-- [ ] Per-spec buff profiles (e.g. Ret Paladin vs Holy Paladin blessing priority)
-- [ ] Minimap button
-- [ ] Raid group support (raid1 .. raid40)
-- [ ] Manual buff override (right-click menu to pick a specific buff)
-- [ ] Sound alert when all buffs are up
+- World of Warcraft Classic: The Burning Crusade (Interface version 20504)
+- Works with all TBC-compatible clients
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE)
+Free to use, modify, and share. Credit appreciated but not required.
