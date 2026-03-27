@@ -3,25 +3,35 @@
 -- Scans party members for missing buffs out of combat and
 -- updates the dynamic button with the next target + spell to cast.
 --
--- Code Review fixes (v1.3.0):
---   [R1] Removed table.sort() from ScanBuffs() - now sorted once at PLAYER_LOGIN.
+-- v1.3.0 Code Review fixes:
+--   [R1] Removed table.sort() from ScanBuffs() - sorted once at PLAYER_LOGIN.
 --   [R2] playerClass set only in PLAYER_LOGIN, not repeated in PLAYER_ENTERING_WORLD.
---   [R3] UNIT_AURA now uses unit:match() instead of string.find() for idiom consistency.
+--   [R3] UNIT_AURA uses unit:match("^party") for precise start-of-string matching.
 --   [R4] Added ValidateSpells() to warn on malformed spell table entries at startup.
---   [R5] ScanBuffs() guards against nil/empty DPB_Spells gracefully.
+--   [R5] ScanBuffs() guards against nil/empty DPB.Spells gracefully.
+--
+-- v1.4.0:
+--   Renamed DPB_Spells to DPB.Spells to reduce global namespace pollution.
+--   Added DPB.debug flag; ScanBuffs() prints results to chat when enabled.
 
 -- ============================================================
 -- Namespace & state
 -- ============================================================
 DPB = DPB or {}
-DPB.nextSpell    = nil  -- spell name to cast next
-DPB.nextTarget   = nil  -- unit token ("player", "party1" .. "party4")
-DPB.nextIcon     = nil  -- icon path for button texture
-DPB.playerClass  = nil  -- caster's class (e.g. "DRUID")
+DPB.nextSpell    = nil   -- spell name to cast next
+DPB.nextTarget   = nil   -- unit token ("player", "party1" .. "party4")
+DPB.nextIcon     = nil   -- icon path for button texture
+DPB.playerClass  = nil   -- caster's class (e.g. "DRUID")
+DPB.debug        = false -- set true via /dpb debug to print scan output to chat
 
 -- ============================================================
 -- Helpers
 -- ============================================================
+
+-- Local shorthand for debug output.
+local function DPBPrint(msg)
+  print("|cff00ff00[DPB]|r " .. tostring(msg))
+end
 
 -- Check if a unit currently has a specific buff by name.
 local function UnitHasBuff(unit, buffName)
@@ -75,15 +85,15 @@ end
 
 -- [R4] Validate spell table entries at startup and print warnings for bad data.
 local function ValidateSpells()
-  if not DPB_Spells then
-    print("|cffff4444[DPB]|r WARNING: DPB_Spells is nil - no spells loaded!")
+  if not DPB.Spells then
+    DPBPrint("WARNING: DPB.Spells is nil - no spells loaded!")
     return
   end
   local required = { "spellName", "buffName", "icon", "class", "priority", "isGroupBuff" }
-  for i, spell in ipairs(DPB_Spells) do
+  for i, spell in ipairs(DPB.Spells) do
     for _, field in ipairs(required) do
       if spell[field] == nil then
-        print("|cffff4444[DPB]|r WARNING: Spell #" .. i .. " (" .. (spell.spellName or "?") .. ") missing field: " .. field)
+        DPBPrint("WARNING: Spell #" .. i .. " (" .. (spell.spellName or "?") .. ") missing field: " .. field)
       end
     end
   end
@@ -103,7 +113,8 @@ function DPB:ScanBuffs()
   end
 
   -- [R5] Guard against missing or empty spell table
-  if not DPB_Spells or #DPB_Spells == 0 then
+  if not DPB.Spells or #DPB.Spells == 0 then
+    if DPB.debug then DPBPrint("ScanBuffs: DPB.Spells is empty or nil.") end
     DPB.nextSpell  = nil
     DPB.nextTarget = nil
     DPB.nextIcon   = nil
@@ -114,39 +125,53 @@ function DPB:ScanBuffs()
   local playerClass = DPB.playerClass
   local units = GetPartyUnits()
 
-  -- [R1] NOTE: DPB_Spells is sorted once in PLAYER_LOGIN - do NOT sort here.
+  if DPB.debug then
+    DPBPrint("ScanBuffs: class=" .. tostring(playerClass) .. ", units=" .. #units)
+  end
 
-  for _, spell in ipairs(DPB_Spells) do
+  -- [R1] NOTE: DPB.Spells is sorted once in PLAYER_LOGIN - do NOT sort here.
+
+  for _, spell in ipairs(DPB.Spells) do
     -- Skip spells the player's class cannot cast
-    if spell.class == playerClass and PlayerKnowsSpell(spell.spellName) then
-      if spell.isGroupBuff then
-        -- [Bug 4 Fix] Group buffs: check if ANY party member is missing the buff.
-        -- We do NOT set a unit attribute - group buff spells in TBC (Gift of the Wild,
-        -- Prayer of Fortitude, etc.) cast on the whole party/raid automatically.
-        for _, unit in ipairs(units) do
-          if UnitExists(unit) and not UnitIsDead(unit) then
-            if ClassMatches(unit, spell.targetClass) then
-              if not UnitHasBuff(unit, spell.buffName) then
-                DPB.nextSpell  = spell.spellName
-                DPB.nextTarget = nil  -- nil = no unit override; spell itself is AoE
-                DPB.nextIcon   = spell.icon
-                DPB:UpdateButton()
-                return
+    if spell.class == playerClass then
+      if not PlayerKnowsSpell(spell.spellName) then
+        if DPB.debug then
+          DPBPrint("ScanBuffs: skipping " .. spell.spellName .. " (not in spellbook)")
+        end
+      else
+        if spell.isGroupBuff then
+          -- [Bug 4 Fix] Group buffs: check if ANY party member is missing the buff.
+          for _, unit in ipairs(units) do
+            if UnitExists(unit) and not UnitIsDead(unit) then
+              if ClassMatches(unit, spell.targetClass) then
+                if not UnitHasBuff(unit, spell.buffName) then
+                  if DPB.debug then
+                    DPBPrint("ScanBuffs: need " .. spell.spellName .. " (group) - " .. unit .. " missing " .. spell.buffName)
+                  end
+                  DPB.nextSpell  = spell.spellName
+                  DPB.nextTarget = nil
+                  DPB.nextIcon   = spell.icon
+                  DPB:UpdateButton()
+                  return
+                end
               end
             end
           end
-        end
-      else
-        -- Single-target buffs: find the first unit that needs it.
-        for _, unit in ipairs(units) do
-          if UnitExists(unit) and not UnitIsDead(unit) then
-            if ClassMatches(unit, spell.targetClass) then
-              if not UnitHasBuff(unit, spell.buffName) then
-                DPB.nextSpell  = spell.spellName
-                DPB.nextTarget = unit
-                DPB.nextIcon   = spell.icon
-                DPB:UpdateButton()
-                return
+        else
+          -- Single-target buffs: find the first unit that needs it.
+          for _, unit in ipairs(units) do
+            if UnitExists(unit) and not UnitIsDead(unit) then
+              if ClassMatches(unit, spell.targetClass) then
+                if not UnitHasBuff(unit, spell.buffName) then
+                  if DPB.debug then
+                    DPBPrint("ScanBuffs: need " .. spell.spellName .. " on " .. unit)
+                  end
+                  DPB.nextSpell  = spell.spellName
+                  DPB.nextTarget = unit
+                  DPB.nextIcon   = spell.icon
+                  DPB:UpdateButton()
+                  return
+                end
               end
             end
           end
@@ -156,6 +181,7 @@ function DPB:ScanBuffs()
   end
 
   -- All buffs are up!
+  if DPB.debug then DPBPrint("ScanBuffs: all buffs are up.") end
   DPB.nextSpell  = nil
   DPB.nextTarget = nil
   DPB.nextIcon   = nil
@@ -183,9 +209,8 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     ValidateSpells()
 
     -- [R1] Sort spell table ONCE here, not on every ScanBuffs() call.
-    -- DPB_Spells is static data - sorting it every scan was wasteful.
-    if DPB_Spells then
-      table.sort(DPB_Spells, function(a, b) return a.priority < b.priority end)
+    if DPB.Spells then
+      table.sort(DPB.Spells, function(a, b) return a.priority < b.priority end)
     end
 
     -- Restore button position before ScanBuffs so button is placed correctly
@@ -198,11 +223,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
 
   elseif event == "PLAYER_ENTERING_WORLD" then
     -- Zone transition / UI reload. Class already set. Just re-scan.
-    -- [R2] playerClass intentionally NOT re-set here - it's already correct from PLAYER_LOGIN.
+    -- [R2] playerClass intentionally NOT re-set here.
     DPB:ScanBuffs()
 
   elseif event == "UNIT_AURA" then
-    -- [R3] unit:match() is more idiomatic than string.find() for simple pattern checks.
+    -- [R3] unit:match("^party") anchored to start of string for precision.
     local unit = ...
     if unit == "player" or unit:match("^party") then
       DPB:ScanBuffs()
