@@ -254,4 +254,5 @@ end
 -- NOTE: PLAYER_LOGIN is intentionally NOT registered here.
 -- Core.lua owns PLAYER_LOGIN and calls DPB:RestorePosition() before
 -- DPB:ScanBuffs() to guarantee correct ordering.
-button:Show()
+-- Initial button visibility is fully controlled by RestorePosition() via
+-- DPB_SavedVars.shown - no unconditional Show() here to avoid flicker.
