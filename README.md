@@ -13,8 +13,9 @@
 - **Real-time scanning** — Updates instantly when auras change, party composition changes, or you leave combat
 - **Out-of-combat only** — Fully respects WoW's combat lockdown; safe to use
 - **Draggable button** — Reposition the button anywhere on screen by dragging it
+- **Saved position** — Button remembers its location across sessions via `SavedVariables`
 - **Tooltip** — Hover to see what spell will be cast and on whom
-- **Slash command** — Toggle button visibility with `/dpb`
+- **Slash commands** — Toggle, reset position, hide/show via `/dpb`
 
 ---
 
@@ -26,7 +27,7 @@
    World of Warcraft/_classic_tbc_/Interface/AddOns/
    ```
 3. Launch WoW and enable the addon in the **AddOns** menu on the character select screen
-4. Log in — the button will appear on screen and begin scanning immediately
+4. Log in — the button appears at your last saved position and begins scanning immediately
 
 ---
 
@@ -34,10 +35,10 @@
 
 ```
 DynamicPartyBuff/
-├── DynamicPartyBuff.toc   # Addon manifest (interface version, load order)
+├── DynamicPartyBuff.toc   # Addon manifest (interface version, SavedVariables, load order)
 ├── Spells.lua             # Spell & buff data table (add/edit spells here)
 ├── Core.lua               # Buff scanner, party loop, event handling
-├── Button.lua             # Secure dynamic button, visuals, tooltip, slash cmd
+├── Button.lua             # Secure dynamic button, visuals, tooltip, position saving
 ├── LICENSE
 └── README.md
 ```
@@ -72,6 +73,21 @@ DynamicPartyBuff/
 
 ---
 
+## Saved Button Position
+
+The button's screen position and visibility are saved automatically to `DPB_SavedVars` (stored in `WTF/Account/.../SavedVariables/DynamicPartyBuff.lua`).
+
+| Event | What happens |
+|---|---|
+| Drag and release | Position saved immediately via `DPB:SavePosition()` |
+| `/dpb` (hide/show) | Visibility state saved immediately |
+| `/dpb reset` | Position reset to screen center; saved |
+| Next login | `PLAYER_LOGIN` fires after WoW loads SavedVars; `DPB:RestorePosition()` re-anchors the button |
+
+On first install (no saved data), the button defaults to screen center with a -200px vertical offset.
+
+---
+
 ## Adding or Editing Spells
 
 Open `Spells.lua` and add a new entry to the `DPB_Spells` table:
@@ -94,13 +110,14 @@ Open `Spells.lua` and add a new entry to the `DPB_Spells` table:
 
 | Command | Action |
 |---------|--------|
-| `/dpb` | Toggle button visibility |
+| `/dpb` | Toggle button visibility (state is saved) |
+| `/dpb reset` | Move button back to default center position |
 
 ---
 
 ## Roadmap
 
-- [ ] Saved position (remember button location across sessions)
+- [x] Saved button position across sessions
 - [ ] Per-spec buff profiles (e.g. Ret Paladin vs Holy Paladin blessing priority)
 - [ ] Minimap button
 - [ ] Raid group support (raid1 .. raid40)
