@@ -4,12 +4,15 @@
 -- Priority determines cast order (lower number = higher priority).
 -- targetClass = nil means the buff applies to all classes.
 --
--- Code Review notes (v1.3.0):
+-- v1.4.0: DPB_Spells global renamed to DPB.Spells to reduce namespace pollution.
 --   [R10] Verified all buffName values match the actual aura name as returned by UnitBuff().
 --   [R11] Added Mark of the Wild (single-target rank) as Druid fallback after Gift of the Wild.
 --   [R12] Paladin blessing targetClass lists audited for TBC accuracy.
 
-DPB_Spells = {
+-- Spells.lua loads before Core.lua, so ensure the DPB namespace table exists.
+DPB = DPB or {}
+
+DPB.Spells = {
 
   -- ===== DRUID =====
   {
@@ -100,7 +103,6 @@ DPB_Spells = {
 
   -- ===== PALADIN =====
   -- [R12] Greater Blessings are single-target (class-specific) in TBC.
-  --       They apply to ONE player of that class at a time (10-min duration).
   --       The buff aura name is the regular Blessing name (without "Greater").
   {
     spellName    = "Greater Blessing of Kings",
