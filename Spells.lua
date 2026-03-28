@@ -1,3 +1,4 @@
+print("|cffff0000[DPB] Spells.lua LOADING|r")
 -- Spells.lua
 -- DynamicPartyBuff: Spell and buff data table
 -- Each entry defines a buff the addon will check and cast.
