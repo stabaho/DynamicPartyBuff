@@ -1,3 +1,4 @@
+print("|cffff0000[DPB] Button.lua LOADING|r")
 -- Button.lua
 -- DynamicPartyBuff: Secure dynamic buff button
 -- Uses SecureActionButtonTemplate so it works with the WoW protected action system.
