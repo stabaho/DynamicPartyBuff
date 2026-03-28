@@ -1,21 +1,19 @@
 print("|cffff0000[DPB] Button.lua LOADING|r")
 -- Button.lua
 -- DynamicPartyBuff: Secure dynamic buff button
--- Uses SecureActionButtonTemplate so it works with the WoW protected action system.
--- The button is draggable, shows the next spell icon + tooltip,
--- and saves its screen position across sessions via DPB_SavedVars.
---
--- Code Review fixes (v1.3.0):
--- [R6] Cooldown frame is now wired to the actual spell cooldown via GetSpellCooldown().
--- [R7] Label truncation uses string.utf8len-safe approach via string.sub (capped at 13 chars).
--- [R8] Tooltip now shows spell rank from GetSpellInfo() for full spell context.
--- [R9] Tooltip target name nil-guarded cleanly.
+-- v1.5.1 fixes:
+-- [Fix A] Removed redundant SetAlpha(0.5) in UpdateButton All Up branch;
+--         SetButtonReady(false) already sets alpha to 0.6 consistently.
+-- [Fix B] SetButtonReady now resets icon to question mark on error states
+--         so the icon visually matches the red status label.
+-- [Fix C] /dpb debugevents now correctly toggles DPB.debugEvents which
+--         is checked in Core.lua's OnEvent handler.
 -- ============================================================
 -- Default saved variable values
 -- ============================================================
-local DEFAULT_X      = 0
-local DEFAULT_Y      = -200
-local DEFAULT_SHOWN  = true
+local DEFAULT_X     = 0
+local DEFAULT_Y     = -200
+local DEFAULT_SHOWN = true
 -- ============================================================
 -- Create the secure button frame
 -- ============================================================
@@ -31,18 +29,13 @@ button:SetMovable(true)
 button:EnableMouse(true)
 button:RegisterForDrag("LeftButton")
 button:SetClampedToScreen(true)
--- OnDragStart: begin moving (only allowed out of combat)
 button:SetScript("OnDragStart", function(self)
-  if not InCombatLockdown() then
-    self:StartMoving()
-  end
+  if not InCombatLockdown() then self:StartMoving() end
 end)
--- OnDragStop: stop moving and immediately save the new position
 button:SetScript("OnDragStop", function(self)
   self:StopMovingOrSizing()
   DPB:SavePosition()
 end)
--- Register for left-click spell cast
 button:RegisterForClicks("LeftButtonUp")
 button:SetAttribute("type", "spell")
 -- ============================================================
@@ -51,24 +44,18 @@ button:SetAttribute("type", "spell")
 local iconTex = button:CreateTexture(nil, "BACKGROUND")
 iconTex:SetAllPoints(button)
 iconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
--- Cooldown overlay (uses the standard Cooldown frame)
--- [R6] This is created here; UpdateButton() will call SetCooldown() on it
--- using GetSpellCooldown() so the swipe animation actually plays.
 local cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
 cooldown:SetAllPoints(button)
 cooldown:SetDrawEdge(true)
 cooldown:SetHideCountdownNumbers(false)
--- Gloss / border overlay
 local border = button:CreateTexture(nil, "OVERLAY")
 border:SetTexture("Interface\\Buttons\\UI-Quickslot2")
 border:SetSize(64, 64)
 border:SetPoint("CENTER", button, "CENTER", 0, 0)
--- Status label (spell name or status text below the button)
 local label = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 label:SetPoint("BOTTOM", button, "BOTTOM", 0, -14)
 label:SetTextColor(1, 1, 1, 1)
 label:SetText("Scanning...")
--- Target name label (shows who is being buffed, above button)
 local targetLabel = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 targetLabel:SetPoint("TOP", button, "TOP", 0, 14)
 targetLabel:SetTextColor(0.4, 0.9, 1, 1)
@@ -79,7 +66,6 @@ targetLabel:SetText("")
 button:SetScript("OnEnter", function(self)
   GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
   if DPB.nextSpell then
-    -- [R8] Show spell name and rank from GetSpellInfo for full context
     local spellName, spellRank = GetSpellInfo(DPB.nextSpell)
     local displayName = spellName or DPB.nextSpell
     if spellRank and spellRank ~= "" then
@@ -87,7 +73,6 @@ button:SetScript("OnEnter", function(self)
     end
     GameTooltip:SetText("|cffffd700" .. displayName .. "|r", 1, 1, 1)
     if DPB.nextTarget then
-      -- [R9] Nil-guard UnitName result
       local targetName = UnitName(DPB.nextTarget) or DPB.nextTarget
       GameTooltip:AddLine("Target: " .. targetName, 0.4, 0.9, 1)
     else
@@ -117,38 +102,29 @@ button:SetScript("OnEnter", function(self)
   end
   GameTooltip:Show()
 end)
-button:SetScript("OnLeave", function(self)
-  GameTooltip:Hide()
-end)
+button:SetScript("OnLeave", function(self) GameTooltip:Hide() end)
 -- ============================================================
--- SavePosition: write current screen offset into DPB_SavedVars.
--- [Bug 5 Fix] Do NOT use button:GetPoint(1) - after a drag the anchor
--- index can shift and return incorrect or stale values.
--- Instead, calculate the CENTER offset from UIParent directly using
--- absolute pixel positions, which is always accurate post-drag.
+-- SavePosition
 -- ============================================================
 function DPB:SavePosition()
   local bX, bY = button:GetCenter()
   local sX, sY = UIParent:GetCenter()
   if not bX or not sX then return end
-  local x = bX - sX
-  local y = bY - sY
   DPB_SavedVars = DPB_SavedVars or {}
-  DPB_SavedVars.x = x
-  DPB_SavedVars.y = y
+  DPB_SavedVars.x = bX - sX
+  DPB_SavedVars.y = bY - sY
   DPB_SavedVars.shown = button:IsShown() and true or false
 end
 -- ============================================================
--- RestorePosition: read DPB_SavedVars and reposition the button.
--- Called by Core.lua's PLAYER_LOGIN handler.
+-- RestorePosition
 -- ============================================================
 function DPB:RestorePosition()
   DPB_SavedVars = DPB_SavedVars or {}
-  local x = DPB_SavedVars.x
-  local y = DPB_SavedVars.y
+  local x     = DPB_SavedVars.x
+  local y     = DPB_SavedVars.y
   local shown = DPB_SavedVars.shown
-  if x == nil then x = DEFAULT_X end
-  if y == nil then y = DEFAULT_Y end
+  if x    == nil then x    = DEFAULT_X     end
+  if y    == nil then y    = DEFAULT_Y     end
   if shown == nil then shown = DEFAULT_SHOWN end
   button:ClearAllPoints()
   button:SetPoint("CENTER", UIParent, "CENTER", x, y)
@@ -156,16 +132,13 @@ function DPB:RestorePosition()
   print("|cff00ff00[DPB]|r Position restored (" .. string.format("%.0f", x) .. ", " .. string.format("%.0f", y) .. ")")
 end
 -- ============================================================
--- UpdateButton: called by Core.lua after every scan.
--- [Bug 4 Fix] nextTarget may be nil for group buffs.
--- [R6] Wires up cooldown frame to actual spell cooldown swipe.
--- [R7] Label truncation capped safely at 13 visible characters.
+-- UpdateButton: called after every scan when a spell is ready or all up.
 -- ============================================================
 function DPB:UpdateButton()
   if InCombatLockdown() then return end
   if DPB.nextSpell then
     if DPB.debug then
-      print("|cff00ff00[DPB]|r UpdateButton: nextSpell=" .. tostring(DPB.nextSpell) .. " unit=" .. (DPB.nextTarget or "nil"))
+      print("|cff00ff00[DPB]|r UpdateButton: spell=" .. tostring(DPB.nextSpell) .. " unit=" .. tostring(DPB.nextTarget))
     end
     button:SetAttribute("spell", DPB.nextSpell)
     if DPB.nextTarget then
@@ -176,26 +149,21 @@ function DPB:UpdateButton()
       button:SetAttribute("unit", nil)
       targetLabel:SetText("Party")
     end
-    -- Update icon
     iconTex:SetTexture(DPB.nextIcon or "Interface\\Icons\\INV_Misc_QuestionMark")
-    -- [R6] Wire cooldown frame to actual spell cooldown
-    local start, duration, enable = GetSpellCooldown(DPB.nextSpell)
+    local start, duration = GetSpellCooldown(DPB.nextSpell)
     if start and start > 0 then
       cooldown:SetCooldown(start, duration)
     else
       cooldown:SetCooldown(0, 0)
     end
-    -- [R7] Truncate long spell names safely
     local shortSpell = DPB.nextSpell
-    if #shortSpell > 13 then
-      shortSpell = string.sub(shortSpell, 1, 13) .. "..."
-    end
+    if #shortSpell > 13 then shortSpell = string.sub(shortSpell, 1, 13) .. "..." end
     label:SetText(shortSpell)
-    button:SetAlpha(1.0)
+    -- [Fix A] Removed SetAlpha(0.5) here; SetButtonReady(true) sets 1.0 consistently.
     DPB:SetButtonReady(true)
   else
     if DPB.debug then
-      print("|cff00ff00[DPB]|r UpdateButton: All buffs up state.")
+      print("|cff00ff00[DPB]|r UpdateButton: All Up state")
     end
     iconTex:SetTexture("Interface\\Icons\\Spell_Holy_Resurrection")
     label:SetText("|cff00ff00All Up!|r")
@@ -203,12 +171,12 @@ function DPB:UpdateButton()
     button:SetAttribute("spell", nil)
     button:SetAttribute("unit", nil)
     cooldown:SetCooldown(0, 0)
-    button:SetAlpha(0.5)
+    -- [Fix A] Removed SetAlpha(0.5); SetButtonReady(false) sets 0.6 consistently.
     DPB:SetButtonReady(false)
   end
 end
 -- ============================================================
--- SetButtonReady: visual enable / disable state
+-- SetButtonReady: visual enable / disable state.
 -- ============================================================
 function DPB:SetButtonReady(ready, statusText)
   if DPB.debug and statusText then
@@ -221,6 +189,9 @@ function DPB:SetButtonReady(ready, statusText)
     border:SetVertexColor(0.5, 0.5, 0.5, 0.8)
     button:SetAlpha(0.6)
     if statusText then
+      -- [Fix B] Reset icon to question mark on any error state so the
+      -- icon visually matches the red status label.
+      iconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       label:SetText("|cffff4444" .. statusText .. "|r")
       targetLabel:SetText("")
     end
@@ -228,11 +199,6 @@ function DPB:SetButtonReady(ready, statusText)
 end
 -- ============================================================
 -- Slash commands: /dpb
--- /dpb -> toggle show/hide (saves state)
--- /dpb reset -> move button back to default center position
--- /dpb debug -> toggle scan debug output to chat
--- /dpb debugevents -> toggle event logging independently
--- /dpb help -> show available commands
 -- ============================================================
 SLASH_DYNAMICPARTYBUFF1 = "/dpb"
 SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
@@ -246,25 +212,26 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
   elseif cmd == "debug" then
     DPB.debug = not DPB.debug
     if DPB.debug then
-      print("|cff00ff00[DPB]|r Debug mode |cff00ff00ON|r - scan output will print to chat.")
+      print("|cff00ff00[DPB]|r Debug mode |cff00ff00ON|r")
       DPB:ScanBuffs()
     else
-      print("|cff00ff00[DPB]|r Debug mode |cffff4444OFF|r.")
+      print("|cff00ff00[DPB]|r Debug mode |cffff4444OFF|r")
     end
   elseif cmd == "debugevents" then
+    -- [Fix C] Toggling DPB.debugEvents which Core.lua's OnEvent now checks.
     DPB.debugEvents = not DPB.debugEvents
     if DPB.debugEvents then
-      print("|cff00ff00[DPB]|r Event Debug mode |cff00ff00ON|r - every fired event will log to chat.")
+      print("|cff00ff00[DPB]|r Event debug |cff00ff00ON|r - every event logs to chat.")
     else
-      print("|cff00ff00[DPB]|r Event Debug mode |cffff4444OFF|r.")
+      print("|cff00ff00[DPB]|r Event debug |cffff4444OFF|r")
     end
   elseif cmd == "help" then
     print("|cff00ff00[DPB]|r Commands:")
-    print("  |cffffff00/dpb|r - toggle button visibility")
-    print("  |cffffff00/dpb reset|r - move button to default position")
-    print("  |cffffff00/dpb debug|r - toggle scan debug output")
+    print("  |cffffff00/dpb|r          - toggle button visibility")
+    print("  |cffffff00/dpb reset|r    - move button to default position")
+    print("  |cffffff00/dpb debug|r    - toggle scan debug output")
     print("  |cffffff00/dpb debugevents|r - toggle event-level logging")
-    print("  |cffffff00/dpb help|r - show this help")
+    print("  |cffffff00/dpb help|r     - show this help")
   else
     if button:IsShown() then
       button:Hide()
@@ -277,8 +244,5 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
     end
   end
 end
--- NOTE: PLAYER_LOGIN is intentionally NOT registered here.
--- Core.lua owns PLAYER_LOGIN and calls DPB:RestorePosition() before
--- DPB:ScanBuffs() to guarantee correct ordering.
--- Initial button visibility is fully controlled by RestorePosition() via
--- DPB_SavedVars.shown - no unconditional Show() here to avoid flicker.
+-- NOTE: PLAYER_LOGIN is owned by Core.lua which calls DPB:RestorePosition()
+-- before DPB:ScanBuffs(). No unconditional Show() here to avoid flicker.
