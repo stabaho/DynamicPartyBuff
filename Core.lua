@@ -1,21 +1,27 @@
 -- Core.lua
 -- DynamicPartyBuff: Main addon logic
--- v1.5.1 - Full diagnostic build.
---   Fixed: syntax error in OnEvent (broken multi-line elseif).
---   Fixed: No Spells path uses SetButtonReady, not UpdateButton.
---   Fixed: DPB.debugEvents now wired into OnEvent handler.
---   Diagnostic prints retained on all paths.
+-- v1.6.0 - Code review fixes.
+--   [R1]  GetPartyUnits: prefer GetNumGroupMembers, fall back to GetNumPartyMembers.
+--         Fixes silent party-scan failure on clients that lack GetNumPartyMembers.
+--   [R2]  UNIT_AURA events are now debounced (0.2 s) to prevent frame hitching
+--         when many aura events fire in rapid succession.
+--   [R3]  DeferredScan OnUpdate fallback reuses a single persistent frame instead
+--         of creating a new frame on every call.
+--   [R4]  Removed PE() spam that was unconditional on every scan path.
+--         Diagnostic output now only fires when DPB.debug is true.
+--   [R5]  PLAYER_ENTERING_WORLD: removed redundant playerClass re-assignment;
+--         class is already set at PLAYER_LOGIN. Comment explains intent.
 -- ============================================================
 -- Namespace & state
 -- ============================================================
 DPB = DPB or {}
-DPB.nextSpell    = nil
-DPB.nextTarget   = nil
-DPB.nextIcon     = nil
-DPB.playerClass  = nil
-DPB.debug        = false
-DPB.debugEvents  = false
-DPB.currentStatus = "Scanning..."
+DPB.nextSpell      = nil
+DPB.nextTarget     = nil
+DPB.nextIcon       = nil
+DPB.playerClass    = nil
+DPB.debug          = false
+DPB.debugEvents    = false
+DPB.currentStatus  = "Scanning..."
 -- ============================================================
 -- Print helpers
 -- ============================================================
@@ -23,7 +29,9 @@ local function P(msg)
   print("|cff00ff00[DPB]|r " .. tostring(msg))
 end
 local function PE(msg)
-  print("|cffffaa00[DPB-DIAG]|r " .. tostring(msg))
+  if DPB.debug then
+    print("|cffffaa00[DPB-DIAG]|r " .. tostring(msg))
+  end
 end
 -- ============================================================
 -- Core helpers
@@ -38,11 +46,9 @@ local function UnitHasBuff(unit, buffName)
   end
   return false
 end
-
 local function PlayerKnowsSpell(spellName)
   return GetSpellInfo(spellName) ~= nil
 end
-
 local function ClassMatches(unit, targetClassList)
   if not targetClassList then return true end
   local _, unitClass = UnitClass(unit)
@@ -51,31 +57,31 @@ local function ClassMatches(unit, targetClassList)
   end
   return false
 end
-
 local function GetPartyUnits()
   local units = { "player" }
-  local numParty = 0
-  if GetNumPartyMembers then
-    numParty = GetNumPartyMembers()
-  end
+  -- [R1] Prefer GetNumGroupMembers (correct TBC API); fall back to the
+  -- deprecated GetNumPartyMembers for clients that lack the newer call.
+  local numParty = (GetNumGroupMembers and GetNumGroupMembers()) or
+                   (GetNumPartyMembers and GetNumPartyMembers()) or 0
   PE("GetPartyUnits: numParty=" .. tostring(numParty))
   for i = 1, numParty do
     table.insert(units, "party" .. i)
   end
   return units
 end
-
 local function ValidateSpells()
   if not DPB.Spells then
     PE("ValidateSpells: DPB.Spells is NIL!")
     return
   end
   PE("ValidateSpells: " .. #DPB.Spells .. " spells loaded.")
-  for i, spell in ipairs(DPB.Spells) do
-    PE("  [" .. i .. "] " .. tostring(spell.spellName) .. " class=" .. tostring(spell.class) .. " group=" .. tostring(spell.isGroupBuff))
-  end
 end
-
+-- ============================================================
+-- Deferred scan helpers
+-- [R3] Reuse a single frame for the OnUpdate fallback instead of
+--      creating a new one on every DeferredScan call.
+-- ============================================================
+local _deferFrame = nil
 local function DeferredScan(label)
   PE("DeferredScan from: " .. tostring(label))
   if C_Timer and C_Timer.After then
@@ -84,8 +90,10 @@ local function DeferredScan(label)
       DPB:ScanBuffs()
     end)
   else
-    local f = CreateFrame("Frame")
-    f:SetScript("OnUpdate", function(self)
+    if not _deferFrame then
+      _deferFrame = CreateFrame("Frame")
+    end
+    _deferFrame:SetScript("OnUpdate", function(self)
       self:SetScript("OnUpdate", nil)
       PE("DeferredScan fired (OnUpdate): calling ScanBuffs")
       DPB:ScanBuffs()
@@ -93,29 +101,46 @@ local function DeferredScan(label)
   end
 end
 -- ============================================================
+-- UNIT_AURA debounce
+-- [R2] Coalesce rapid aura events into a single scan 0.2 s later.
+-- ============================================================
+local _scanPending = false
+local function ScheduleScan(label)
+  PE("ScheduleScan requested from: " .. tostring(label))
+  if _scanPending then return end
+  _scanPending = true
+  if C_Timer and C_Timer.After then
+    C_Timer.After(0.2, function()
+      _scanPending = false
+      PE("ScheduleScan firing ScanBuffs")
+      DPB:ScanBuffs()
+    end)
+  else
+    -- Fallback: fire immediately via DeferredScan if no C_Timer
+    _scanPending = false
+    DeferredScan(label)
+  end
+end
+-- ============================================================
 -- Core Scan
 -- ============================================================
 function DPB:ScanBuffs()
   PE("=== ScanBuffs START ===")
-
   if InCombatLockdown() then
     DPB.currentStatus = "In Combat"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
     PE("ScanBuffs: in combat, aborting")
     return
   end
-
-  PE("ScanBuffs: Spells=" .. tostring(DPB.Spells) .. " count=" .. tostring(DPB.Spells and #DPB.Spells or "nil"))
   if not DPB.Spells or #DPB.Spells == 0 then
-    DPB.nextSpell  = nil
-    DPB.nextTarget = nil
-    DPB.nextIcon   = nil
-    DPB.currentStatus = "No Spells"
+    DPB.nextSpell      = nil
+    DPB.nextTarget     = nil
+    DPB.nextIcon       = nil
+    DPB.currentStatus  = "No Spells"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
     PE("ScanBuffs: no spell table, aborting")
     return
   end
-
   if not DPB.playerClass then
     local _, class = UnitClass("player")
     PE("ScanBuffs: fetching class from UnitClass: " .. tostring(class))
@@ -123,20 +148,13 @@ function DPB:ScanBuffs()
   end
   local playerClass = DPB.playerClass
   PE("ScanBuffs: playerClass=" .. tostring(playerClass))
-  PE("ScanBuffs: UpdateButton=" .. tostring(DPB.UpdateButton) .. " SetButtonReady=" .. tostring(DPB.SetButtonReady))
-
   local units = GetPartyUnits()
-  PE("ScanBuffs: scanning " .. #units .. " unit(s)")
-
   local classHasSpells = false
   local anySpellKnown  = false
-
   for idx, spell in ipairs(DPB.Spells) do
-    PE("Spell[" .. idx .. "]: " .. tostring(spell.spellName) .. " spell.class=" .. tostring(spell.class))
     if spell.class == playerClass then
       classHasSpells = true
       local known = PlayerKnowsSpell(spell.spellName)
-      PE("  class match! known=" .. tostring(known))
       if known then
         anySpellKnown = true
         if spell.isGroupBuff then
@@ -144,11 +162,10 @@ function DPB:ScanBuffs()
             if UnitExists(unit) and not UnitIsDead(unit) then
               if ClassMatches(unit, spell.targetClass) then
                 local has = UnitHasBuff(unit, spell.buffName)
-                PE("  group " .. unit .. " has " .. spell.buffName .. "=" .. tostring(has))
                 if not has then
-                  DPB.nextSpell  = spell.spellName
-                  DPB.nextTarget = nil
-                  DPB.nextIcon   = spell.icon
+                  DPB.nextSpell     = spell.spellName
+                  DPB.nextTarget    = nil
+                  DPB.nextIcon      = spell.icon
                   DPB.currentStatus = "Ready"
                   PE("ScanBuffs: READY group " .. spell.spellName .. " for " .. unit)
                   if DPB.UpdateButton then DPB:UpdateButton() end
@@ -162,11 +179,10 @@ function DPB:ScanBuffs()
             if UnitExists(unit) and not UnitIsDead(unit) then
               if ClassMatches(unit, spell.targetClass) then
                 local has = UnitHasBuff(unit, spell.buffName)
-                PE("  single " .. unit .. " has " .. spell.buffName .. "=" .. tostring(has))
                 if not has then
-                  DPB.nextSpell  = spell.spellName
-                  DPB.nextTarget = unit
-                  DPB.nextIcon   = spell.icon
+                  DPB.nextSpell     = spell.spellName
+                  DPB.nextTarget    = unit
+                  DPB.nextIcon      = spell.icon
                   DPB.currentStatus = "Ready"
                   PE("ScanBuffs: READY single " .. spell.spellName .. " on " .. unit)
                   if DPB.UpdateButton then DPB:UpdateButton() end
@@ -179,12 +195,10 @@ function DPB:ScanBuffs()
       end
     end
   end
-
   DPB.nextSpell  = nil
   DPB.nextTarget = nil
   DPB.nextIcon   = nil
   PE("ScanBuffs END: classHasSpells=" .. tostring(classHasSpells) .. " anySpellKnown=" .. tostring(anySpellKnown))
-
   if not playerClass then
     DPB.currentStatus = "Class Missing"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
@@ -212,7 +226,6 @@ eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:SetScript("OnEvent", function(self, event, ...)
-  -- [Fix C] Log every event when debugEvents is on (toggled via /dpb debugevents)
   if DPB.debugEvents then
     PE("EVENT: " .. event)
   end
@@ -226,17 +239,20 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
       table.sort(DPB.Spells, function(a, b) return a.priority < b.priority end)
     end
     if DPB.RestorePosition then DPB:RestorePosition() end
-    PE("PLAYER_LOGIN: UpdateButton=" .. tostring(DPB.UpdateButton) .. " SetButtonReady=" .. tostring(DPB.SetButtonReady))
     DeferredScan("PLAYER_LOGIN")
   elseif event == "PLAYER_ENTERING_WORLD" then
-    PE("EVENT: PLAYER_ENTERING_WORLD")
-    local _, class = UnitClass("player")
-    if class and class ~= "" then DPB.playerClass = class end
+    -- [R5] playerClass was already set at PLAYER_LOGIN; we only re-fetch
+    -- here as a safety net for edge cases (e.g. first login before LOGIN fires).
+    if not DPB.playerClass then
+      local _, class = UnitClass("player")
+      if class and class ~= "" then DPB.playerClass = class end
+    end
     DeferredScan("PLAYER_ENTERING_WORLD")
   elseif event == "UNIT_AURA" then
+    -- [R2] Debounce: many aura events can fire in a single frame.
     local unit = ...
     if unit == "player" or unit:match("^party") then
-      DPB:ScanBuffs()
+      ScheduleScan("UNIT_AURA")
     end
   elseif event == "GROUP_ROSTER_UPDATE" then
     DeferredScan("GROUP_ROSTER_UPDATE")
@@ -246,4 +262,4 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     DeferredScan("PLAYER_REGEN_ENABLED")
   end
 end)
-P("v1.5.1 loaded - watch for [DPB-DIAG] on login")
+P("v1.6.0 loaded. /dpb help for commands. /dpb debug for diagnostics.")
