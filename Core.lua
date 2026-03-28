@@ -116,7 +116,7 @@ function DPB:ScanBuffs()
     DPB.nextTarget = nil
     DPB.nextIcon = nil
     DPB.currentStatus = "No Spells"
-    DPB:UpdateButton()
+    if DPB.UpdateButton then DPB:UpdateButton() end
     return
   end
   -- Robust class check: try to fetch it if nil
@@ -151,7 +151,7 @@ function DPB:ScanBuffs()
                   DPB.nextTarget = nil
                   DPB.nextIcon   = spell.icon
                   DPB.currentStatus = "Ready"
-                  DPB:UpdateButton()
+                  if DPB.UpdateButton then DPB:UpdateButton() end
                   return
                 end
               end
@@ -167,7 +167,7 @@ function DPB:ScanBuffs()
                   DPB.nextTarget = unit
                   DPB.nextIcon   = spell.icon
                   DPB.currentStatus = "Ready"
-                  DPB:UpdateButton()
+                  if DPB.UpdateButton then DPB:UpdateButton() end
                   return
                 end
               end
@@ -184,22 +184,22 @@ function DPB:ScanBuffs()
   if not playerClass then
     DPBDebug("ScanBuffs END: playerClass is nil. Can't match spells.")
     DPB.currentStatus = "Class Missing"
-    DPB:SetButtonReady(false, DPB.currentStatus)
+    if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   elseif not classHasSpells then
     -- Player's class has no entries in the spell table at all
     DPBDebug("ScanBuffs END: no spells defined for class " .. tostring(playerClass))
     DPB.currentStatus = "No Spells"
-    DPB:SetButtonReady(false, DPB.currentStatus)
+    if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   elseif not anySpellKnown then
     -- Class is supported but player hasn't trained any of the spells yet
     DPBDebug("ScanBuffs END: class matched but no spells in spellbook yet.")
     DPB.currentStatus = "Train Spells"
-    DPB:SetButtonReady(false, DPB.currentStatus)
+    if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   else
     -- Genuinely all buffs are up
     DPBDebug("ScanBuffs END: all buffs are up.")
     DPB.currentStatus = "All Up"
-    DPB:UpdateButton()
+    if DPB.UpdateButton then DPB:UpdateButton() end
   end
 end
 -- ============================================================
