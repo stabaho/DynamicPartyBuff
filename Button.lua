@@ -95,7 +95,24 @@ button:SetScript("OnEnter", function(self)
     GameTooltip:AddLine("Left-click to cast.", 0.7, 0.7, 0.7)
     GameTooltip:AddLine("Drag to reposition.", 0.5, 0.5, 0.5)
   else
-    GameTooltip:SetText("|cff00ff00All buffs are up!|r", 1, 1, 1)
+    local status = DPB.currentStatus or "All Up"
+    if status == "All Up" then
+      GameTooltip:SetText("|cff00ff00All buffs are up!|r", 1, 1, 1)
+    else
+      GameTooltip:SetText("|cffff4444Status: " .. status .. "|r", 1, 1, 1)
+      if status == "Class Missing" then
+        GameTooltip:AddLine("Addon could not determine your class.", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Try /reload or check for Lua errors.", 0.5, 0.5, 0.5)
+      elseif status == "No Spells" then
+        GameTooltip:AddLine("No spells defined for your class in Spells.lua.", 0.7, 0.7, 0.7)
+      elseif status == "Train Spells" then
+        GameTooltip:AddLine("You haven't trained these spells yet.", 0.7, 0.7, 0.7)
+      elseif status == "In Combat" then
+        GameTooltip:AddLine("Scanning disabled during combat.", 0.7, 0.7, 0.7)
+      else
+        GameTooltip:AddLine("Wait for scan to finish...", 0.7, 0.7, 0.7)
+      end
+    end
   end
   GameTooltip:Show()
 end)
