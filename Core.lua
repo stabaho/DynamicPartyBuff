@@ -27,6 +27,7 @@ DPB.nextIcon     = nil   -- icon path for button texture
 DPB.playerClass  = nil   -- caster's class (e.g. "DRUID")
 DPB.debug        = false -- set true via /dpb debug to print scan output to chat
 DPB.debugEvents  = false -- set true via /dpb debugevents to also log every event
+DPB.currentStatus = "Scanning..." -- tracks why nextSpell is nil (for tooltip)
 -- ============================================================
 -- Helpers
 -- ============================================================
@@ -103,8 +104,9 @@ end
 -- ============================================================
 function DPB:ScanBuffs()
   if InCombatLockdown() then
+    DPB.currentStatus = "In Combat"
     if DPB.SetButtonReady then
-      DPB:SetButtonReady(false, "In Combat")
+      DPB:SetButtonReady(false, DPB.currentStatus)
     end
     return
   end
@@ -113,8 +115,17 @@ function DPB:ScanBuffs()
     DPB.nextSpell = nil
     DPB.nextTarget = nil
     DPB.nextIcon = nil
+    DPB.currentStatus = "No Spells"
     DPB:UpdateButton()
     return
+  end
+  -- Robust class check: try to fetch it if nil
+  if not DPB.playerClass then
+    local _, class = UnitClass("player")
+    if class and class ~= "" then
+      DPB.playerClass = class
+      DPBDebug("ScanBuffs: playerClass was nil, fetched: " .. tostring(class))
+    end
   end
   local playerClass = DPB.playerClass
   local units = GetPartyUnits()
@@ -139,6 +150,7 @@ function DPB:ScanBuffs()
                   DPB.nextSpell  = spell.spellName
                   DPB.nextTarget = nil
                   DPB.nextIcon   = spell.icon
+                  DPB.currentStatus = "Ready"
                   DPB:UpdateButton()
                   return
                 end
@@ -154,6 +166,7 @@ function DPB:ScanBuffs()
                   DPB.nextSpell  = spell.spellName
                   DPB.nextTarget = unit
                   DPB.nextIcon   = spell.icon
+                  DPB.currentStatus = "Ready"
                   DPB:UpdateButton()
                   return
                 end
@@ -168,17 +181,24 @@ function DPB:ScanBuffs()
   DPB.nextSpell  = nil
   DPB.nextTarget = nil
   DPB.nextIcon   = nil
-  if not classHasSpells then
+  if not playerClass then
+    DPBDebug("ScanBuffs END: playerClass is nil. Can't match spells.")
+    DPB.currentStatus = "Class Missing"
+    DPB:SetButtonReady(false, DPB.currentStatus)
+  elseif not classHasSpells then
     -- Player's class has no entries in the spell table at all
     DPBDebug("ScanBuffs END: no spells defined for class " .. tostring(playerClass))
-    DPB:SetButtonReady(false, "No Spells")
+    DPB.currentStatus = "No Spells"
+    DPB:SetButtonReady(false, DPB.currentStatus)
   elseif not anySpellKnown then
     -- Class is supported but player hasn't trained any of the spells yet
     DPBDebug("ScanBuffs END: class matched but no spells in spellbook yet.")
-    DPB:SetButtonReady(false, "Train Spells")
+    DPB.currentStatus = "Train Spells"
+    DPB:SetButtonReady(false, DPB.currentStatus)
   else
     -- Genuinely all buffs are up
     DPBDebug("ScanBuffs END: all buffs are up.")
+    DPB.currentStatus = "All Up"
     DPB:UpdateButton()
   end
 end
@@ -196,7 +216,9 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
   if event == "PLAYER_LOGIN" then
     local _, class = UnitClass("player")
     DPBEventDebug("PLAYER_LOGIN: class=" .. tostring(class))
-    DPB.playerClass = class
+    if class and class ~= "" then
+      DPB.playerClass = class
+    end
     ValidateSpells()
     if DPB.Spells then
       table.sort(DPB.Spells, function(a, b) return a.priority < b.priority end)
@@ -207,15 +229,14 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     DPB:ScanBuffs()
   elseif event == "PLAYER_ENTERING_WORLD" then
     -- [Bug A] Re-set playerClass here as a safety net.
-    -- In TBC Classic, PLAYER_ENTERING_WORLD can fire before PLAYER_LOGIN on
-    -- a fresh login, leaving playerClass nil for the first scan. Setting it
-    -- here ensures ScanBuffs() always has a valid class to work with.
     local _, class = UnitClass("player")
     local isLogin, isReload = ...
     DPBEventDebug("PLAYER_ENTERING_WORLD: class=" .. tostring(class)
-      .. " isInitialLogin=" .. tostring(isLogin)
+      .. " isLogin=" .. tostring(isLogin)
       .. " isReload=" .. tostring(isReload))
-    DPB.playerClass = class
+    if class and class ~= "" then
+      DPB.playerClass = class
+    end
     DPB:ScanBuffs()
   elseif event == "UNIT_AURA" then
     local unit = ...
