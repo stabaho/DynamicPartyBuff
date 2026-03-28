@@ -17,14 +17,22 @@
 --         Each fired event prints: timestamp, event name, and key args.
 -- [Debug] UpdateButton() and SetButtonReady() now log state transitions.
 -- [Debug] /dpb debugevents toggles event logging independently of scan logging.
+--
+-- v1.4.3 Bug fix:
+-- [Bug D] PLAYER_ENTERING_WORLD now defers ScanBuffs() by one frame via
+--         C_Timer.After(0, ...) so that the spellbook is fully populated
+--         before PlayerKnowsSpell() is called. Without the delay, the game
+--         engine may not yet have registered learned spells, causing the
+--         button to incorrectly show "Train Spells" on every fresh login
+--         until the first UNIT_AURA event fired and corrected the state.
 -- ============================================================
 -- Namespace & state
 -- ============================================================
 DPB = DPB or {}
-DPB.nextSpell    = nil   -- spell name to cast next
-DPB.nextTarget   = nil   -- unit token ("player", "party1" .. "party4")
-DPB.nextIcon     = nil   -- icon path for button texture
-DPB.playerClass  = nil   -- caster's class (e.g. "DRUID")
+DPB.nextSpell    = nil  -- spell name to cast next
+DPB.nextTarget   = nil  -- unit token ("player", "party1" .. "party4")
+DPB.nextIcon     = nil  -- icon path for button texture
+DPB.playerClass  = nil  -- caster's class (e.g. "DRUID")
 DPB.debug        = false -- set true via /dpb debug to print scan output to chat
 DPB.debugEvents  = false -- set true via /dpb debugevents to also log every event
 DPB.currentStatus = "Scanning..." -- tracks why nextSpell is nil (for tooltip)
@@ -105,16 +113,14 @@ end
 function DPB:ScanBuffs()
   if InCombatLockdown() then
     DPB.currentStatus = "In Combat"
-    if DPB.SetButtonReady then
-      DPB:SetButtonReady(false, DPB.currentStatus)
-    end
+    if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
     return
   end
   if not DPB.Spells or #DPB.Spells == 0 then
     DPBDebug("ScanBuffs: DPB.Spells is empty or nil.")
-    DPB.nextSpell = nil
+    DPB.nextSpell  = nil
     DPB.nextTarget = nil
-    DPB.nextIcon = nil
+    DPB.nextIcon   = nil
     DPB.currentStatus = "No Spells"
     if DPB.UpdateButton then DPB:UpdateButton() end
     return
@@ -237,7 +243,11 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     if class and class ~= "" then
       DPB.playerClass = class
     end
-    DPB:ScanBuffs()
+    -- [Bug D] Defer scan by one frame so the spellbook is fully populated
+    -- before PlayerKnowsSpell() is called. Without this, spells may not yet
+    -- be registered at PLAYER_ENTERING_WORLD time, causing a false
+    -- "Train Spells" state on every fresh login.
+    C_Timer.After(0, function() DPB:ScanBuffs() end)
   elseif event == "UNIT_AURA" then
     local unit = ...
     if unit == "player" or unit:match("^party") then
