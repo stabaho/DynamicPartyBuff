@@ -1,8 +1,10 @@
 -- Core.lua
 -- DynamicPartyBuff: Main addon logic
--- v1.5.1 - Fix syntax error in OnEvent handler (broken multi-line elseif).
---          Also fixes: No Spells path now uses SetButtonReady, not UpdateButton.
---          Diagnostic prints retained on all paths.
+-- v1.5.1 - Full diagnostic build.
+--   Fixed: syntax error in OnEvent (broken multi-line elseif).
+--   Fixed: No Spells path uses SetButtonReady, not UpdateButton.
+--   Fixed: DPB.debugEvents now wired into OnEvent handler.
+--   Diagnostic prints retained on all paths.
 -- ============================================================
 -- Namespace & state
 -- ============================================================
@@ -109,9 +111,7 @@ function DPB:ScanBuffs()
     DPB.nextTarget = nil
     DPB.nextIcon   = nil
     DPB.currentStatus = "No Spells"
-    if DPB.SetButtonReady then
-      DPB:SetButtonReady(false, DPB.currentStatus)
-    end
+    if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
     PE("ScanBuffs: no spell table, aborting")
     return
   end
@@ -119,9 +119,7 @@ function DPB:ScanBuffs()
   if not DPB.playerClass then
     local _, class = UnitClass("player")
     PE("ScanBuffs: fetching class from UnitClass: " .. tostring(class))
-    if class and class ~= "" then
-      DPB.playerClass = class
-    end
+    if class and class ~= "" then DPB.playerClass = class end
   end
   local playerClass = DPB.playerClass
   PE("ScanBuffs: playerClass=" .. tostring(playerClass))
@@ -214,6 +212,10 @@ eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
 eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 eventFrame:SetScript("OnEvent", function(self, event, ...)
+  -- [Fix C] Log every event when debugEvents is on (toggled via /dpb debugevents)
+  if DPB.debugEvents then
+    PE("EVENT: " .. event)
+  end
   if event == "PLAYER_LOGIN" then
     PE("EVENT: PLAYER_LOGIN")
     local _, class = UnitClass("player")
