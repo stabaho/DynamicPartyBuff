@@ -1,18 +1,16 @@
 -- Core.lua
 -- DynamicPartyBuff: Main addon logic
--- Scans party members for missing buffs out of combat and
--- updates the dynamic button with the next target + spell to cast.
 --
--- v1.3.0 Code Review fixes:
---   [R1] Removed table.sort() from ScanBuffs() - sorted once at PLAYER_LOGIN.
---   [R2] playerClass set only in PLAYER_LOGIN, not repeated in PLAYER_ENTERING_WORLD.
---   [R3] UNIT_AURA uses unit:match("^party") for precise start-of-string matching.
---   [R4] Added ValidateSpells() to warn on malformed spell table entries at startup.
---   [R5] ScanBuffs() guards against nil/empty DPB.Spells gracefully.
---
--- v1.4.0:
---   Renamed DPB_Spells to DPB.Spells to reduce global namespace pollution.
---   Added DPB.debug flag; ScanBuffs() prints results to chat when enabled.
+-- v1.4.1 Bug fixes:
+--   [Bug A] PLAYER_ENTERING_WORLD now sets playerClass as a safety net.
+--           In TBC Classic the event fire order can vary; re-setting here
+--           costs nothing and prevents a nil playerClass on first scan.
+--   [Bug B] ScanBuffs() now tracks whether any spell matched the player's
+--           class. If the class matched but ALL spells were skipped because
+--           they aren't in the spellbook, the button shows "No Spells Known"
+--           instead of the misleading "All Up!" / "All buffs are up" state.
+--   [Bug C] The "all up" path now only fires when at least one class-matched
+--           spell was fully evaluated (not just silently skipped).
 
 -- ============================================================
 -- Namespace & state
@@ -28,12 +26,10 @@ DPB.debug        = false -- set true via /dpb debug to print scan output to chat
 -- Helpers
 -- ============================================================
 
--- Local shorthand for debug output.
 local function DPBPrint(msg)
   print("|cff00ff00[DPB]|r " .. tostring(msg))
 end
 
--- Check if a unit currently has a specific buff by name.
 local function UnitHasBuff(unit, buffName)
   local i = 1
   while true do
@@ -45,12 +41,10 @@ local function UnitHasBuff(unit, buffName)
   return false
 end
 
--- Check if the player knows a given spell.
 local function PlayerKnowsSpell(spellName)
   return GetSpellInfo(spellName) ~= nil
 end
 
--- Check if a unit's class matches a targetClass whitelist (nil = any class).
 local function ClassMatches(unit, targetClassList)
   if not targetClassList then return true end
   local _, unitClass = UnitClass(unit)
@@ -60,22 +54,18 @@ local function ClassMatches(unit, targetClassList)
   return false
 end
 
--- [Bug 3 Fix] TBC uses GetNumGroupMembers() which counts ALL members including self.
--- Party-only tokens are party1..party4, so subtract 1 for self and cap at 4.
 local function GetPartyUnits()
   local units = { "player" }
   local total = 0
   if GetNumGroupMembers then
     total = GetNumGroupMembers()
   elseif GetNumPartyMembers then
-    -- Vanilla/pre-TBC fallback: GetNumPartyMembers excludes self
     total = GetNumPartyMembers()
     for i = 1, total do
       table.insert(units, "party" .. i)
     end
     return units
   end
-  -- GetNumGroupMembers includes the player, so party members = total - 1, max 4
   local partyCount = math.min(total - 1, 4)
   for i = 1, partyCount do
     table.insert(units, "party" .. i)
@@ -83,7 +73,6 @@ local function GetPartyUnits()
   return units
 end
 
--- [R4] Validate spell table entries at startup and print warnings for bad data.
 local function ValidateSpells()
   if not DPB.Spells then
     DPBPrint("WARNING: DPB.Spells is nil - no spells loaded!")
@@ -100,19 +89,16 @@ local function ValidateSpells()
 end
 
 -- ============================================================
--- Core Scan: find the highest-priority missing buff
+-- Core Scan
 -- ============================================================
 function DPB:ScanBuffs()
-  -- Only act out of combat
   if InCombatLockdown() then
-    -- [Bug 1 Fix] Guard: Button.lua may not be loaded yet at earliest events
     if DPB.SetButtonReady then
       DPB:SetButtonReady(false, "In Combat")
     end
     return
   end
 
-  -- [R5] Guard against missing or empty spell table
   if not DPB.Spells or #DPB.Spells == 0 then
     if DPB.debug then DPBPrint("ScanBuffs: DPB.Spells is empty or nil.") end
     DPB.nextSpell  = nil
@@ -129,18 +115,23 @@ function DPB:ScanBuffs()
     DPBPrint("ScanBuffs: class=" .. tostring(playerClass) .. ", units=" .. #units)
   end
 
-  -- [R1] NOTE: DPB.Spells is sorted once in PLAYER_LOGIN - do NOT sort here.
+  -- [Bug B] Track whether the player's class has ANY entries in the spell table
+  -- and whether any of those were actually evaluatable (known spell).
+  local classHasSpells  = false  -- true if at least one spell.class == playerClass
+  local anySpellKnown   = false  -- true if at least one of those spells is in spellbook
 
   for _, spell in ipairs(DPB.Spells) do
-    -- Skip spells the player's class cannot cast
     if spell.class == playerClass then
+      classHasSpells = true
+
       if not PlayerKnowsSpell(spell.spellName) then
         if DPB.debug then
           DPBPrint("ScanBuffs: skipping " .. spell.spellName .. " (not in spellbook)")
         end
       else
+        anySpellKnown = true
+
         if spell.isGroupBuff then
-          -- [Bug 4 Fix] Group buffs: check if ANY party member is missing the buff.
           for _, unit in ipairs(units) do
             if UnitExists(unit) and not UnitIsDead(unit) then
               if ClassMatches(unit, spell.targetClass) then
@@ -158,7 +149,6 @@ function DPB:ScanBuffs()
             end
           end
         else
-          -- Single-target buffs: find the first unit that needs it.
           for _, unit in ipairs(units) do
             if UnitExists(unit) and not UnitIsDead(unit) then
               if ClassMatches(unit, spell.targetClass) then
@@ -180,12 +170,24 @@ function DPB:ScanBuffs()
     end
   end
 
-  -- All buffs are up!
-  if DPB.debug then DPBPrint("ScanBuffs: all buffs are up.") end
+  -- [Bug B] Distinguish between "all buffs up" and "no spells known yet"
   DPB.nextSpell  = nil
   DPB.nextTarget = nil
   DPB.nextIcon   = nil
-  DPB:UpdateButton()
+
+  if not classHasSpells then
+    -- Player's class has no entries in the spell table at all
+    if DPB.debug then DPBPrint("ScanBuffs: no spells defined for class " .. tostring(playerClass)) end
+    DPB:SetButtonReady(false, "No Spells")
+  elseif not anySpellKnown then
+    -- Class is supported but player hasn't trained any of the spells yet
+    if DPB.debug then DPBPrint("ScanBuffs: class matched but no spells in spellbook yet.") end
+    DPB:SetButtonReady(false, "Train Spells")
+  else
+    -- Genuinely all buffs are up
+    if DPB.debug then DPBPrint("ScanBuffs: all buffs are up.") end
+    DPB:UpdateButton()
+  end
 end
 
 -- ============================================================
@@ -195,39 +197,33 @@ local eventFrame = CreateFrame("Frame", "DPB_EventFrame", UIParent)
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("UNIT_AURA")
-eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")   -- TBC: party roster changes
-eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED") -- TBC fallback
-eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")  -- Just left combat
+eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+eventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 
 eventFrame:SetScript("OnEvent", function(self, event, ...)
   if event == "PLAYER_LOGIN" then
-    -- [R2] Set playerClass ONCE here. Class never changes within a session.
     local _, class = UnitClass("player")
     DPB.playerClass = class
-
-    -- [R4] Validate spell table entries at startup.
     ValidateSpells()
-
-    -- [R1] Sort spell table ONCE here, not on every ScanBuffs() call.
     if DPB.Spells then
       table.sort(DPB.Spells, function(a, b) return a.priority < b.priority end)
     end
-
-    -- Restore button position before ScanBuffs so button is placed correctly
-    -- before UpdateButton() fires.
     if DPB.RestorePosition then
       DPB:RestorePosition()
     end
-
     DPB:ScanBuffs()
 
   elseif event == "PLAYER_ENTERING_WORLD" then
-    -- Zone transition / UI reload. Class already set. Just re-scan.
-    -- [R2] playerClass intentionally NOT re-set here.
+    -- [Bug A] Re-set playerClass here as a safety net.
+    -- In TBC Classic, PLAYER_ENTERING_WORLD can fire before PLAYER_LOGIN on
+    -- a fresh login, leaving playerClass nil for the first scan. Setting it
+    -- here ensures ScanBuffs() always has a valid class to work with.
+    local _, class = UnitClass("player")
+    DPB.playerClass = class
     DPB:ScanBuffs()
 
   elseif event == "UNIT_AURA" then
-    -- [R3] unit:match("^party") anchored to start of string for precision.
     local unit = ...
     if unit == "player" or unit:match("^party") then
       DPB:ScanBuffs()
