@@ -1,12 +1,11 @@
-print("|cffff0000[DPB] Button.lua LOADING|r")
 -- Button.lua
 -- DynamicPartyBuff: Secure dynamic buff button
--- v1.5.2 fixes:
+-- v1.6.0 fixes:
 --   [Fix D] UpdateButton All Up branch now calls SetButtonReady(true, nil)
---           so the button is full-alpha and green when all buffs are applied.
 --           Previously called SetButtonReady(false) which dimmed the button
 --           and overwrote the icon/label -- visual bug now corrected.
 --   [Fix E] label initializes as "Loading..." so any failure to scan is obvious.
+--   [Fix F] Removed load-time debug print() -- it was spamming red text to all users' chat.
 -- ============================================================
 -- Default saved variable values
 -- ============================================================
