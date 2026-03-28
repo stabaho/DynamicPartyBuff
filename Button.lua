@@ -1,18 +1,17 @@
 print("|cffff0000[DPB] Button.lua LOADING|r")
 -- Button.lua
 -- DynamicPartyBuff: Secure dynamic buff button
--- v1.5.1 fixes:
--- [Fix A] Removed redundant SetAlpha(0.5) in UpdateButton All Up branch;
---         SetButtonReady(false) already sets alpha to 0.6 consistently.
--- [Fix B] SetButtonReady now resets icon to question mark on error states
---         so the icon visually matches the red status label.
--- [Fix C] /dpb debugevents now correctly toggles DPB.debugEvents which
---         is checked in Core.lua's OnEvent handler.
+-- v1.5.2 fixes:
+--   [Fix D] UpdateButton All Up branch now calls SetButtonReady(true, nil)
+--           so the button is full-alpha and green when all buffs are applied.
+--           Previously called SetButtonReady(false) which dimmed the button
+--           and overwrote the icon/label -- visual bug now corrected.
+--   [Fix E] label initializes as "Loading..." so any failure to scan is obvious.
 -- ============================================================
 -- Default saved variable values
 -- ============================================================
-local DEFAULT_X     = 0
-local DEFAULT_Y     = -200
+local DEFAULT_X    = 0
+local DEFAULT_Y    = -200
 local DEFAULT_SHOWN = true
 -- ============================================================
 -- Create the secure button frame
@@ -55,7 +54,7 @@ border:SetPoint("CENTER", button, "CENTER", 0, 0)
 local label = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 label:SetPoint("BOTTOM", button, "BOTTOM", 0, -14)
 label:SetTextColor(1, 1, 1, 1)
-label:SetText("Scanning...")
+label:SetText("Loading...")
 local targetLabel = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 targetLabel:SetPoint("TOP", button, "TOP", 0, 14)
 targetLabel:SetTextColor(0.4, 0.9, 1, 1)
@@ -123,8 +122,8 @@ function DPB:RestorePosition()
   local x     = DPB_SavedVars.x
   local y     = DPB_SavedVars.y
   local shown = DPB_SavedVars.shown
-  if x    == nil then x    = DEFAULT_X     end
-  if y    == nil then y    = DEFAULT_Y     end
+  if x    == nil then x    = DEFAULT_X    end
+  if y    == nil then y    = DEFAULT_Y    end
   if shown == nil then shown = DEFAULT_SHOWN end
   button:ClearAllPoints()
   button:SetPoint("CENTER", UIParent, "CENTER", x, y)
@@ -159,7 +158,6 @@ function DPB:UpdateButton()
     local shortSpell = DPB.nextSpell
     if #shortSpell > 13 then shortSpell = string.sub(shortSpell, 1, 13) .. "..." end
     label:SetText(shortSpell)
-    -- [Fix A] Removed SetAlpha(0.5) here; SetButtonReady(true) sets 1.0 consistently.
     DPB:SetButtonReady(true)
   else
     if DPB.debug then
@@ -171,8 +169,8 @@ function DPB:UpdateButton()
     button:SetAttribute("spell", nil)
     button:SetAttribute("unit", nil)
     cooldown:SetCooldown(0, 0)
-    -- [Fix A] Removed SetAlpha(0.5); SetButtonReady(false) sets 0.6 consistently.
-    DPB:SetButtonReady(false)
+    -- [Fix D] All Up IS a good state: full alpha, green border, no dimming.
+    DPB:SetButtonReady(true, nil)
   end
 end
 -- ============================================================
@@ -189,8 +187,6 @@ function DPB:SetButtonReady(ready, statusText)
     border:SetVertexColor(0.5, 0.5, 0.5, 0.8)
     button:SetAlpha(0.6)
     if statusText then
-      -- [Fix B] Reset icon to question mark on any error state so the
-      -- icon visually matches the red status label.
       iconTex:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
       label:SetText("|cffff4444" .. statusText .. "|r")
       targetLabel:SetText("")
@@ -218,7 +214,6 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
       print("|cff00ff00[DPB]|r Debug mode |cffff4444OFF|r")
     end
   elseif cmd == "debugevents" then
-    -- [Fix C] Toggling DPB.debugEvents which Core.lua's OnEvent now checks.
     DPB.debugEvents = not DPB.debugEvents
     if DPB.debugEvents then
       print("|cff00ff00[DPB]|r Event debug |cff00ff00ON|r - every event logs to chat.")
@@ -227,11 +222,11 @@ SlashCmdList["DYNAMICPARTYBUFF"] = function(msg)
     end
   elseif cmd == "help" then
     print("|cff00ff00[DPB]|r Commands:")
-    print("  |cffffff00/dpb|r          - toggle button visibility")
-    print("  |cffffff00/dpb reset|r    - move button to default position")
-    print("  |cffffff00/dpb debug|r    - toggle scan debug output")
-    print("  |cffffff00/dpb debugevents|r - toggle event-level logging")
-    print("  |cffffff00/dpb help|r     - show this help")
+    print(" |cffffff00/dpb|r - toggle button visibility")
+    print(" |cffffff00/dpb reset|r - move button to default position")
+    print(" |cffffff00/dpb debug|r - toggle scan debug output")
+    print(" |cffffff00/dpb debugevents|r - toggle event-level logging")
+    print(" |cffffff00/dpb help|r - show this help")
   else
     if button:IsShown() then
       button:Hide()
