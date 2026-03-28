@@ -18,13 +18,18 @@
 -- [Debug] UpdateButton() and SetButtonReady() now log state transitions.
 -- [Debug] /dpb debugevents toggles event logging independently of scan logging.
 --
--- v1.4.3 Bug fix:
--- [Bug D] PLAYER_ENTERING_WORLD now defers ScanBuffs() by one frame via
---         C_Timer.After(0, ...) so that the spellbook is fully populated
---         before PlayerKnowsSpell() is called. Without the delay, the game
---         engine may not yet have registered learned spells, causing the
---         button to incorrectly show "Train Spells" on every fresh login
---         until the first UNIT_AURA event fired and corrected the state.
+-- v1.4.3 Bug fixes:
+-- [Bug D] Both PLAYER_LOGIN and PLAYER_ENTERING_WORLD now defer ScanBuffs()
+--         by one frame. The spellbook is not populated at the time these
+--         events fire; calling PlayerKnowsSpell() immediately causes every
+--         spell to appear unknown, showing "Train Spells" incorrectly.
+--         The defer uses C_Timer.After(0,...) with a fallback one-shot
+--         OnUpdate for environments where C_Timer is unavailable.
+-- [Bug E] GetPartyUnits() simplified for TBC Classic. GetNumGroupMembers
+--         does not exist in the TBC 2.4.3 client; the function now uses
+--         GetNumPartyMembers() directly (returns 0-4, not counting player).
+-- [Bug F] PLAYER_ENTERING_WORLD isLogin/isReload args do not exist in TBC;
+--         removed misleading tostring() concatenation from event debug log.
 -- ============================================================
 -- Namespace & state
 -- ============================================================
@@ -42,16 +47,27 @@ DPB.currentStatus = "Scanning..." -- tracks why nextSpell is nil (for tooltip)
 local function DPBPrint(msg)
   print("|cff00ff00[DPB]|r " .. tostring(msg))
 end
--- Unified debug printer: only fires when DPB.debug is true
 local function DPBDebug(msg)
   if DPB.debug then
     DPBPrint(string.format("[%.3f] %s", GetTime(), tostring(msg)))
   end
 end
--- Event debug printer: fires when DPB.debug OR DPB.debugEvents is true
 local function DPBEventDebug(msg)
   if DPB.debug or DPB.debugEvents then
     DPBPrint(string.format("[%.3f] EVENT %s", GetTime(), tostring(msg)))
+  end
+end
+-- [Bug D] Safe one-frame defer: uses C_Timer if available, otherwise a
+-- self-cancelling OnUpdate on a tiny helper frame.
+local function DeferredScan()
+  if C_Timer and C_Timer.After then
+    C_Timer.After(0, function() DPB:ScanBuffs() end)
+  else
+    local f = CreateFrame("Frame")
+    f:SetScript("OnUpdate", function(self)
+      self:SetScript("OnUpdate", nil)
+      DPB:ScanBuffs()
+    end)
   end
 end
 local function UnitHasBuff(unit, buffName)
@@ -75,20 +91,12 @@ local function ClassMatches(unit, targetClassList)
   end
   return false
 end
+-- [Bug E] TBC Classic uses GetNumPartyMembers() which returns 0-4 (excludes
+-- the player). GetNumGroupMembers did not exist until Cataclysm.
 local function GetPartyUnits()
   local units = { "player" }
-  local total = 0
-  if GetNumGroupMembers then
-    total = GetNumGroupMembers()
-  elseif GetNumPartyMembers then
-    total = GetNumPartyMembers()
-    for i = 1, total do
-      table.insert(units, "party" .. i)
-    end
-    return units
-  end
-  local partyCount = math.min(total - 1, 4)
-  for i = 1, partyCount do
+  local count = GetNumPartyMembers and GetNumPartyMembers() or 0
+  for i = 1, count do
     table.insert(units, "party" .. i)
   end
   return units
@@ -136,10 +144,8 @@ function DPB:ScanBuffs()
   local playerClass = DPB.playerClass
   local units = GetPartyUnits()
   DPBDebug("ScanBuffs START: class=" .. tostring(playerClass) .. ", units=" .. #units)
-  -- [Bug B] Track whether the player's class has ANY entries in the spell table
-  -- and whether any of those were actually evaluatable (known spell).
-  local classHasSpells = false  -- true if at least one spell.class == playerClass
-  local anySpellKnown  = false  -- true if at least one of those spells is in spellbook
+  local classHasSpells = false
+  local anySpellKnown  = false
   for _, spell in ipairs(DPB.Spells) do
     if spell.class == playerClass then
       classHasSpells = true
@@ -183,7 +189,6 @@ function DPB:ScanBuffs()
       end
     end
   end
-  -- [Bug B] Distinguish between "all buffs up" and "no spells known yet"
   DPB.nextSpell  = nil
   DPB.nextTarget = nil
   DPB.nextIcon   = nil
@@ -192,17 +197,14 @@ function DPB:ScanBuffs()
     DPB.currentStatus = "Class Missing"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   elseif not classHasSpells then
-    -- Player's class has no entries in the spell table at all
     DPBDebug("ScanBuffs END: no spells defined for class " .. tostring(playerClass))
     DPB.currentStatus = "No Spells"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   elseif not anySpellKnown then
-    -- Class is supported but player hasn't trained any of the spells yet
     DPBDebug("ScanBuffs END: class matched but no spells in spellbook yet.")
     DPB.currentStatus = "Train Spells"
     if DPB.SetButtonReady then DPB:SetButtonReady(false, DPB.currentStatus) end
   else
-    -- Genuinely all buffs are up
     DPBDebug("ScanBuffs END: all buffs are up.")
     DPB.currentStatus = "All Up"
     if DPB.UpdateButton then DPB:UpdateButton() end
@@ -232,22 +234,18 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
     if DPB.RestorePosition then
       DPB:RestorePosition()
     end
-    DPB:ScanBuffs()
+    -- [Bug D] Defer scan: spellbook not populated yet at PLAYER_LOGIN time.
+    DeferredScan()
   elseif event == "PLAYER_ENTERING_WORLD" then
     -- [Bug A] Re-set playerClass here as a safety net.
+    -- [Bug F] TBC does not pass isLogin/isReload args; removed them.
     local _, class = UnitClass("player")
-    local isLogin, isReload = ...
-    DPBEventDebug("PLAYER_ENTERING_WORLD: class=" .. tostring(class)
-      .. " isLogin=" .. tostring(isLogin)
-      .. " isReload=" .. tostring(isReload))
+    DPBEventDebug("PLAYER_ENTERING_WORLD: class=" .. tostring(class))
     if class and class ~= "" then
       DPB.playerClass = class
     end
-    -- [Bug D] Defer scan by one frame so the spellbook is fully populated
-    -- before PlayerKnowsSpell() is called. Without this, spells may not yet
-    -- be registered at PLAYER_ENTERING_WORLD time, causing a false
-    -- "Train Spells" state on every fresh login.
-    C_Timer.After(0, function() DPB:ScanBuffs() end)
+    -- [Bug D] Defer scan: spellbook may not be populated yet.
+    DeferredScan()
   elseif event == "UNIT_AURA" then
     local unit = ...
     if unit == "player" or unit:match("^party") then
