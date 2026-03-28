@@ -2,10 +2,10 @@
 ## Title: DynamicPartyBuff
 ## Notes: Dynamically buffs party members out of combat with a smart one-click button.
 ## Author: stabaho
-## Version: 1.4.1
+## Version: 1.4.3
 ## DefaultState: enabled
 ## SavedVariables: DPB_SavedVars
 
 Spells.lua
-Core.lua
 Button.lua
+Core.lua
